@@ -85,7 +85,7 @@ class AndroidFormAdapter:
       if duration.get_attribute("aria-checked") != "true":
         raise FormChanged("duration selection did not stick")
       for textbox, expected in zip(textboxes, values, strict=True):
-        if textbox.get_attribute("value") != expected:
+        if driver.execute_script("return arguments[0].value;", textbox) != expected:
           raise FormChanged("form field verification failed")
 
       submit = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[@role='button']//*[normalize-space()='Submit']/..")))
