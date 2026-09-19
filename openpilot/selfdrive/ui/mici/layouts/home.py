@@ -5,15 +5,14 @@ import math
 import time
 
 from openpilot.cereal import log
-from openpilot.cereal.visionipc import VisionStreamType
 import pyray as rl
 from collections.abc import Callable
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.layouts import HBoxLayout
 from openpilot.system.ui.widgets.icon_widget import IconWidget
-from openpilot.system.ui.widgets.label import UnifiedLabel, gui_label
+from openpilot.system.ui.widgets.label import UnifiedLabel
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, TextAlignment, TextAlignmentVertical
-from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
+from openpilot.selfdrive.ui.mici.parking_overlay import parking_detail, parking_title, should_show_parking
 from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
 from openpilot.common.version import RELEASE_BRANCHES
 
@@ -134,7 +133,6 @@ class MiciHomeLayout(Widget):
     self._is_pressed_prev = False
 
     self._version_text = self._get_version_text()
-    self._parking_camera_view: CameraView | None = None
 
     self._experimental_icon = IconWidget("icons_mici/experimental_mode.png", (48, 48))
     self._usb_icon = IconWidget("icons_mici/usb.png", (62, 40))
@@ -224,61 +222,6 @@ class MiciHomeLayout(Widget):
     return version, branch, commit[:7], date_str
 
   def _render(self, _):
-    parking_test_mode = (ui_state.params.get_bool("ParkingTestMode") and
-                         not ui_state.params.get_bool("IsReleaseBranch"))
-    if parking_test_mode:
-      if self._parking_camera_view is None:
-        self._parking_camera_view = CameraView("camerad", VisionStreamType.VISION_STREAM_WIDE_ROAD)
-      self._parking_camera_view.render(self.rect)
-    elif self._parking_camera_view is not None:
-      self._parking_camera_view.close()
-      self._parking_camera_view = None
-
-    if parking_test_mode:
-      parking = ui_state.sm["parkingState"]
-      phase = parking.phase if ui_state.sm.seen["parkingState"] else "scanning"
-      titles = {
-        "scanning": "looking for parking QR",
-        "detected": "parking QR detected",
-        "countdown": "parking demo ready",
-        "sending": "sending parking demo",
-        "processing": "parking demo processing",
-        "completed": "demo completed",
-        "failed": "parking demo failed",
-        "unknown": "result unknown",
-        "action_required": "action required",
-      }
-      banner = rl.Rectangle(self.rect.x + 8, self.rect.y + self.rect.height - 150, self.rect.width - 16, 142)
-      banner_colors = {
-        "detected": rl.Color(0, 105, 55, 225),
-        "countdown": rl.Color(150, 90, 0, 230),
-        "sending": rl.Color(20, 70, 140, 230),
-        "processing": rl.Color(20, 70, 140, 230),
-        "completed": rl.Color(0, 105, 55, 225),
-        "failed": rl.Color(140, 20, 20, 230),
-        "unknown": rl.Color(140, 80, 0, 230),
-        "action_required": rl.Color(140, 80, 0, 230),
-      }
-      rl.draw_rectangle_rounded(banner, 0.12, 8, banner_colors.get(phase, rl.Color(0, 0, 0, 205)))
-      gui_label(rl.Rectangle(banner.x + 8, banner.y + 4, banner.width - 16, 62),
-                titles.get(phase, "parking camera test"), font_size=40, color=rl.WHITE,
-                font_weight=FontWeight.BOLD, alignment=TextAlignment.CENTER)
-      if phase == "scanning":
-        detail = "Hold the controlled QR steady in the road camera"
-      elif phase == "detected":
-        detail = "Exact QR confirmed · waiting for parked signals"
-      elif phase == "countdown" and parking.actionExpiresAtUnixMs:
-        now_ms = int(datetime.datetime.now(datetime.UTC).timestamp() * 1000)
-        remaining = max(0, (parking.actionExpiresAtUnixMs - now_ms + 999) // 1000)
-        detail = f"Submitting in {remaining}s · tap parking settings to cancel"
-      elif phase == "completed":
-        detail = "Demo completed — no parking purchased."
-      else:
-        detail = f"{parking.plateMasked} · {parking.durationSeconds // 3600} hour(s)"
-      gui_label(rl.Rectangle(banner.x + 8, banner.y + 70, banner.width - 16, 56),
-                detail, font_size=26, color=rl.WHITE, alignment=TextAlignment.CENTER)
-      return
-
     # TODO: why is there extra space here to get it to be flush?
     text_pos = rl.Vector2(self.rect.x - 2 + HOME_PADDING, self.rect.y - 16)
     self._openpilot_label.set_position(text_pos.x, text_pos.y)
@@ -307,40 +250,11 @@ class MiciHomeLayout(Widget):
         self._version_commit_label.set_position(version_pos.x, version_pos.y + self._date_label.font_size + 7)
         self._version_commit_label.render()
 
-    parking = ui_state.sm["parkingState"]
-    benchmark_phase = parking_test_mode and parking.phase in ("scanning", "detected")
-    show_parking = (ui_state.sm.seen["parkingState"] and
-                    (benchmark_phase or
-                     (ui_state.sm["carState"].standstill and parking.phase not in ("", "disabled", "scanning"))))
-    if show_parking:
-      titles = {
-        "scanning": "looking for parking QR",
-        "detected": "parking QR detected",
-        "countdown": "parking demo ready",
-        "sending": "sending parking demo",
-        "processing": "parking demo processing",
-        "completed": "demo completed",
-        "failed": "parking demo failed",
-        "unknown": "result unknown",
-        "action_required": "action required",
-      }
-      self._parking_label.set_text(titles.get(parking.phase, "parking demo"))
+    if should_show_parking():
+      self._parking_label.set_text(parking_title())
       self._parking_label.set_position(self.rect.x + 8, self.rect.y + 205)
       self._parking_label.render()
-      detail = f"{parking.plateMasked} · {parking.durationSeconds // 3600} hour(s)"
-      if parking.phase == "scanning":
-        detail = "Hold the controlled QR steady in the road camera"
-      elif parking.phase == "detected":
-        detail = "Exact QR confirmed · submissions disabled"
-      elif parking.phase == "countdown" and parking.actionExpiresAtUnixMs:
-        now_ms = int(datetime.datetime.now(datetime.UTC).timestamp() * 1000)
-        remaining = max(0, (parking.actionExpiresAtUnixMs - now_ms + 999) // 1000)
-        detail = f"{detail} · submitting in {remaining}s\nTap parking settings to edit or cancel"
-      elif parking.phase == "completed":
-        detail = "Demo completed — no parking purchased."
-      elif parking.emailStatus not in ("", "none"):
-        detail = f"{detail} · email {parking.emailStatus}"
-      self._parking_detail_label.set_text(detail)
+      self._parking_detail_label.set_text(parking_detail())
       self._parking_detail_label.set_position(self.rect.x + 8, self.rect.y + 275)
       self._parking_detail_label.render()
 

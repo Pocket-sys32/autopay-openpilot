@@ -4,6 +4,7 @@ from openpilot.selfdrive.ui.mici.layouts.home import MiciHomeLayout
 from openpilot.selfdrive.ui.mici.layouts.settings.settings import SettingsLayout
 from openpilot.selfdrive.ui.mici.layouts.offroad_alerts import MiciOffroadAlerts
 from openpilot.selfdrive.ui.mici.onroad.augmented_road_view import AugmentedRoadView
+from openpilot.selfdrive.ui.mici.parking_overlay import parking_test_mode_active
 from openpilot.selfdrive.ui.ui_state import device, ui_state
 from openpilot.selfdrive.ui.mici.layouts.onboarding import OnboardingWindow
 from openpilot.selfdrive.ui.body.layouts.onroad import BodyLayout
@@ -23,6 +24,7 @@ class MiciMainLayout(Scroller):
 
     self._prev_onroad = False
     self._prev_standstill = False
+    self._prev_parking_test = False
     self._onroad_time_delay: float | None = None
     self._setup = False
 
@@ -129,6 +131,14 @@ class MiciMainLayout(Scroller):
     if not CS.standstill and self._prev_standstill:
       gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
     self._prev_standstill = CS.standstill
+
+    parking_test = parking_test_mode_active()
+    if parking_test != self._prev_parking_test:
+      self._prev_parking_test = parking_test
+      if parking_test:
+        self._scroll_to(self._onroad_layout)
+      elif not ui_state.started:
+        self._scroll_to(self._home_layout)
 
   def _on_interactive_timeout(self):
     # Don't pop if onboarding
