@@ -75,7 +75,7 @@ class AndroidFormAdapter:
       duration = wait.until(EC.element_to_be_clickable((By.XPATH, f"//*[@role='radio' and @data-value='{duration_label}']")))
       duration.click()
 
-      textboxes = driver.find_elements(By.XPATH, "//*[@role='textbox']")
+      textboxes = driver.find_elements(By.CSS_SELECTOR, "input[type='text'], textarea")
       if len(textboxes) != 5:
         raise FormChanged(f"expected five text fields, found {len(textboxes)}")
       values = [str(request["plate"]), self.card_number, self.cvv, self.expiration, self.zip_code]
