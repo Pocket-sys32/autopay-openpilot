@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from pathlib import Path
 import secrets
 from urllib.parse import urlencode
 
@@ -16,6 +18,7 @@ SCOPE = "https://www.googleapis.com/auth/gmail.send"
 def main() -> None:
   parser = argparse.ArgumentParser(description="Exchange a Gmail OAuth authorization code for an offline refresh token")
   parser.add_argument("--client-json", required=True, help="OAuth desktop client JSON downloaded from Google Cloud")
+  parser.add_argument("--output", help="write the refresh token to a new mode-0600 file instead of stdout")
   args = parser.parse_args()
   data = json.loads(open(args.client_json, encoding="utf-8").read())
   client = data.get("installed") or data.get("web")
@@ -46,6 +49,13 @@ def main() -> None:
   refresh_token = response.json().get("refresh_token")
   if not refresh_token:
     raise RuntimeError("Google did not return a refresh token; revoke the prior grant and retry with prompt=consent")
+  if args.output:
+    output = Path(args.output).expanduser()
+    descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as token_file:
+      token_file.write(refresh_token)
+    print(f"\nRefresh token stored in {output}.")
+    return
   print("\nStore this value as PARKING_GMAIL_REFRESH_TOKEN in Secret Manager or backend.env:")
   print(refresh_token)
 
