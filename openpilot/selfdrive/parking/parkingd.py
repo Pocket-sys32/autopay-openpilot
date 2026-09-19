@@ -414,8 +414,20 @@ class ParkingDaemon:
     if not enabled:
       if self._request is None:
         self._reset_episode()
-      self.last_reason = "FEATURE_DISABLED"
-      self._publish(self._display(plate, now_ns, now_ms) if self._request else ParkingDisplayState())
+      if parking_test_mode_enabled(self.params):
+        self._observe_camera(now_ns)
+        detected = self._candidate_valid(now_ns)
+        self.last_reason = "QR_DETECTED" if detected else "WAITING_FOR_QR"
+        self._publish(ParkingDisplayState(
+          phase="detected" if detected else "scanning",
+          reason_code=self.last_reason,
+          plate=plate,
+          duration_seconds=self._duration(),
+          candidate_present=detected,
+        ))
+      else:
+        self.last_reason = "FEATURE_DISABLED"
+        self._publish(self._display(plate, now_ns, now_ms) if self._request else ParkingDisplayState())
       return
     if not plate:
       self.last_reason = "PLATE_REQUIRED"

@@ -88,6 +88,26 @@ class TestParkingDaemonEvidence(OpenpilotTestCase):
     self.assertTrue(evidence.parking_brake)
     self.assertEqual(evidence.gear, "park")
 
+  def test_disabled_test_mode_publishes_qr_detection_without_submitting(self):
+    params = Params()
+    params.put_bool("ParkingTestMode", True, block=True)
+    params.put_bool("ParkingAutoPayEnabled", False, block=True)
+    publisher = FakePubMaster()
+    with tempfile.TemporaryDirectory() as temporary_directory:
+      daemon = ParkingDaemon(
+        params=params,
+        scanner=FakeScanner(),
+        journal_path=f"{temporary_directory}/parking.db",
+        sm=SimulatedParkedSignals(),
+        pm=publisher,
+      )
+      daemon.step()
+      self.assertEqual(publisher.messages[-1][1].parkingState.phase, "scanning")
+      daemon.step()
+      self.assertEqual(publisher.messages[-1][1].parkingState.phase, "detected")
+      self.assertTrue(publisher.messages[-1][1].parkingState.candidatePresent)
+      self.assertIsNone(daemon._request)
+
   def test_fresh_known_panda_produces_explicit_off_edge(self):
     tracker = IgnitionEdgeTracker()
     first = vehicle_evidence_from_sm(FakeSubMaster(panda_states=(panda(True, False),)), tracker, 10_000_000_000)

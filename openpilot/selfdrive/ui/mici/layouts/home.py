@@ -263,11 +263,14 @@ class MiciHomeLayout(Widget):
         self._version_commit_label.render()
 
     parking = ui_state.sm["parkingState"]
-    show_parking = ((parking_test_mode or ui_state.sm["carState"].standstill) and
-                    parking.phase not in ("", "disabled", "scanning") and
-                    ui_state.sm.seen["parkingState"])
+    benchmark_phase = parking_test_mode and parking.phase in ("scanning", "detected")
+    show_parking = (ui_state.sm.seen["parkingState"] and
+                    (benchmark_phase or
+                     (ui_state.sm["carState"].standstill and parking.phase not in ("", "disabled", "scanning"))))
     if show_parking:
       titles = {
+        "scanning": "looking for parking QR",
+        "detected": "parking QR detected",
         "countdown": "parking demo ready",
         "sending": "sending parking demo",
         "processing": "parking demo processing",
@@ -280,7 +283,11 @@ class MiciHomeLayout(Widget):
       self._parking_label.set_position(self.rect.x + 8, self.rect.y + 205)
       self._parking_label.render()
       detail = f"{parking.plateMasked} · {parking.durationSeconds // 3600} hour(s)"
-      if parking.phase == "countdown" and parking.actionExpiresAtUnixMs:
+      if parking.phase == "scanning":
+        detail = "Hold the controlled QR steady in the road camera"
+      elif parking.phase == "detected":
+        detail = "Exact QR confirmed · submissions disabled"
+      elif parking.phase == "countdown" and parking.actionExpiresAtUnixMs:
         now_ms = int(datetime.datetime.now(datetime.UTC).timestamp() * 1000)
         remaining = max(0, (parking.actionExpiresAtUnixMs - now_ms + 999) // 1000)
         detail = f"{detail} · submitting in {remaining}s\nTap parking settings to edit or cancel"
