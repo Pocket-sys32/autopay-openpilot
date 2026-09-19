@@ -412,8 +412,6 @@ class ParkingDaemon:
     except (TypeError, ValueError):
       plate = ""
     if not enabled:
-      if self._request is None:
-        self._reset_episode()
       if parking_test_mode_enabled(self.params):
         self._observe_camera(now_ns)
         detected = self._candidate_valid(now_ns)
@@ -426,6 +424,8 @@ class ParkingDaemon:
           candidate_present=detected,
         ))
       else:
+        if self._request is None:
+          self._reset_episode()
         self.last_reason = "FEATURE_DISABLED"
         self._publish(self._display(plate, now_ns, now_ms) if self._request else ParkingDisplayState())
       return
