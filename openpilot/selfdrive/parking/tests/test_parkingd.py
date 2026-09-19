@@ -9,7 +9,8 @@ from openpilot.common.test import OpenpilotTestCase
 from openpilot.selfdrive.parking.candidate import CONTROLLED_FORM_URL
 from openpilot.selfdrive.parking.evidence import IgnitionEdge, IgnitionEdgeTracker
 from openpilot.selfdrive.parking.intent import IntentConfig, IntentProfile
-from openpilot.selfdrive.parking.parkingd import ParkingDaemon, vehicle_evidence_from_sm
+from openpilot.selfdrive.parking.parkingd import (ParkingDaemon, SimulatedParkedSignals, parking_test_mode_enabled,
+                                                  vehicle_evidence_from_sm)
 from openpilot.selfdrive.parking.backend_client import BackendAttemptResponse
 from openpilot.selfdrive.parking.qr_detector import QRObservation, QRScan
 
@@ -72,6 +73,21 @@ def panda(ignition_line, ignition_can, panda_type="tres"):
 
 
 class TestParkingDaemonEvidence(OpenpilotTestCase):
+  def test_development_test_mode_is_release_gated(self):
+    params = Params()
+    params.put_bool("ParkingTestMode", True, block=True)
+    params.put_bool("IsReleaseBranch", True, block=True)
+    self.assertFalse(parking_test_mode_enabled(params))
+    self.assertFalse(params.get_bool("ParkingTestMode"))
+
+    params.put_bool("IsReleaseBranch", False, block=True)
+    params.put_bool("ParkingTestMode", True, block=True)
+    self.assertTrue(parking_test_mode_enabled(params))
+    evidence = vehicle_evidence_from_sm(SimulatedParkedSignals(), IgnitionEdgeTracker(), time.monotonic_ns())
+    self.assertTrue(evidence.standstill)
+    self.assertTrue(evidence.parking_brake)
+    self.assertEqual(evidence.gear, car.CarState.GearShifter.park)
+
   def test_fresh_known_panda_produces_explicit_off_edge(self):
     tracker = IgnitionEdgeTracker()
     first = vehicle_evidence_from_sm(FakeSubMaster(panda_states=(panda(True, False),)), tracker, 10_000_000_000)

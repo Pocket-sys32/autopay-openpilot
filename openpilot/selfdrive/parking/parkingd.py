@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import time
+from types import SimpleNamespace
 from typing import Any, Protocol
 import uuid
 
@@ -42,6 +43,35 @@ class Backend(Protocol):
   def put_attempt(self, attempt_id: str, payload: dict[str, Any]) -> BackendAttemptResponse: ...
   def get_attempt(self, attempt_id: str) -> BackendAttemptResponse: ...
   def get_events(self, after_sequence: int) -> BackendAttemptResponse: ...
+
+
+class SimulatedParkedSignals:
+  """Development-only parked evidence for camera testing without a vehicle."""
+
+  def __init__(self):
+    self.seen = {"carState": True, "pandaStates": True}
+    self.alive = {"carState": True, "pandaStates": True}
+    self.valid = {"carState": True, "pandaStates": True}
+    self.recv_time = {"carState": 0.0, "pandaStates": 0.0}
+    self.car_state = SimpleNamespace(canValid=True, canTimeout=False, vEgo=0.0, standstill=True,
+                                     gearShifter=car.CarState.GearShifter.park, parkingBrake=True, doorOpen=False)
+
+  def __getitem__(self, service: str):
+    return self.car_state if service == "carState" else ()
+
+  def update(self, _timeout: int) -> None:
+    now = time.monotonic() - 0.01
+    self.recv_time["carState"] = now
+    self.recv_time["pandaStates"] = now
+
+
+def parking_test_mode_enabled(params: Params) -> bool:
+  requested = params.get_bool("ParkingTestMode")
+  if requested and params.get_bool("IsReleaseBranch"):
+    params.put_bool("ParkingTestMode", False, block=True)
+    cloudlog.error("refusing ParkingTestMode on a release branch")
+    return False
+  return requested
 
 
 def _gear_name(value) -> str | None:
@@ -457,10 +487,17 @@ class ParkingDaemon:
 
 
 def main() -> None:
-  daemon = ParkingDaemon()
+  params = Params()
+  test_mode = parking_test_mode_enabled(params)
+  daemon = ParkingDaemon(params=params, sm=SimulatedParkedSignals() if test_mode else None)
   ratekeeper = Ratekeeper(2.0, print_delay_threshold=0.25)
   while True:
     try:
+      requested_test_mode = parking_test_mode_enabled(params)
+      if requested_test_mode != test_mode:
+        test_mode = requested_test_mode
+        daemon = ParkingDaemon(params=params, sm=SimulatedParkedSignals() if test_mode else None)
+        cloudlog.warning(f"parking test mode {'enabled' if test_mode else 'disabled'}")
       daemon.step()
     except Exception:
       cloudlog.exception("parkingd step failed")

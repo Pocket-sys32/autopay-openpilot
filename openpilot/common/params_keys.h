@@ -130,6 +130,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"ParkingPlateCountry", {PERSISTENT | DONT_LOG, STRING}},
     {"ParkingPlateRegion", {PERSISTENT | DONT_LOG, STRING}},
     {"ParkingSuppressEpisode", {CLEAR_ON_MANAGER_START | DONT_LOG, STRING}},
+    {"ParkingTestMode", {CLEAR_ON_MANAGER_START | DEVELOPMENT_ONLY, BOOL, "0"}},
     {"PrimeType", {PERSISTENT, INT}},
     {"RecordAudio", {PERSISTENT, BOOL}},
     {"RecordFront", {PERSISTENT, BOOL}},
