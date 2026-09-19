@@ -103,6 +103,8 @@ class TestParkingDaemonEvidence(OpenpilotTestCase):
       )
       daemon.step()
       self.assertEqual(publisher.messages[-1][1].parkingState.phase, "scanning")
+      self.assertIn("selfdriveState", [service for service, _ in publisher.messages])
+      self.assertIn("carState", [service for service, _ in publisher.messages])
       daemon.step()
       self.assertEqual(publisher.messages[-1][1].parkingState.phase, "detected")
       self.assertTrue(publisher.messages[-1][1].parkingState.candidatePresent)

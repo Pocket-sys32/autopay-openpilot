@@ -13,6 +13,7 @@ import uuid
 from opendbc.car.structs import car
 
 import openpilot.cereal.messaging as messaging
+from openpilot.cereal import log
 from openpilot.common.hardware.hw import Paths
 from openpilot.common.params import Params
 from openpilot.common.realtime import Ratekeeper
@@ -72,6 +73,13 @@ def parking_test_mode_enabled(params: Params) -> bool:
     cloudlog.error("refusing ParkingTestMode on a release branch")
     return False
   return requested
+
+
+def parking_test_pubmaster(test_mode: bool):
+  services = ["parkingState"]
+  if test_mode:
+    services.extend(["selfdriveState", "carState"])
+  return messaging.PubMaster(services)
 
 
 def _gear_name(value) -> str | None:
@@ -150,6 +158,27 @@ class ParkingDaemon:
     self._local_state: AttemptState | None = None
     self._pending_payload: dict[str, object] | None = None
     self._restore_unresolved_attempt()
+
+  def _publish_test_hud(self) -> None:
+    """Keep the production on-road HUD alive without starting selfdrived."""
+    if hasattr(self.pm, "sock") and "selfdriveState" not in self.pm.sock:
+      return
+    ss_msg = messaging.new_message("selfdriveState")
+    ss_msg.valid = True
+    ss_msg.selfdriveState.state = log.SelfdriveState.OpenpilotState.disabled
+    ss_msg.selfdriveState.enabled = False
+    ss_msg.selfdriveState.active = False
+    ss_msg.selfdriveState.engageable = False
+    self.pm.send("selfdriveState", ss_msg)
+    cs_msg = messaging.new_message("carState")
+    cs_msg.valid = True
+    cs_msg.carState.vEgo = 0.0
+    cs_msg.carState.vEgoCluster = 0.0
+    cs_msg.carState.standstill = True
+    cs_msg.carState.gearShifter = car.CarState.GearShifter.park
+    cs_msg.carState.parkingBrake = True
+    cs_msg.carState.canValid = True
+    self.pm.send("carState", cs_msg)
 
   def _backend(self) -> Backend | None:
     if self._backend_override is not None:
@@ -405,6 +434,8 @@ class ParkingDaemon:
     now_ns = time.monotonic_ns()
     now_ms = int(datetime.datetime.now(datetime.UTC).timestamp() * 1000)
     self.sm.update(0)
+    if parking_test_mode_enabled(self.params):
+      self._publish_test_hud()
     self._consume_future(now_ns, now_ms)
     enabled = self.params.get_bool("ParkingAutoPayEnabled")
     try:
@@ -502,7 +533,8 @@ def main() -> None:
   params = Params()
   test_mode = parking_test_mode_enabled(params)
   daemon = ParkingDaemon(params=params, scanner=VisionQRScanner(prefer_wide=test_mode),
-                         sm=SimulatedParkedSignals() if test_mode else None)
+                         sm=SimulatedParkedSignals() if test_mode else None,
+                         pm=parking_test_pubmaster(test_mode))
   ratekeeper = Ratekeeper(2.0, print_delay_threshold=0.25)
   while True:
     try:
@@ -510,7 +542,8 @@ def main() -> None:
       if requested_test_mode != test_mode:
         test_mode = requested_test_mode
         daemon = ParkingDaemon(params=params, scanner=VisionQRScanner(prefer_wide=test_mode),
-                               sm=SimulatedParkedSignals() if test_mode else None)
+                               sm=SimulatedParkedSignals() if test_mode else None,
+                               pm=parking_test_pubmaster(test_mode))
         cloudlog.warning(f"parking test mode {'enabled' if test_mode else 'disabled'}")
       daemon.step()
     except Exception:

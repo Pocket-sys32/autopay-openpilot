@@ -172,8 +172,10 @@ class UIState:
     elif not self.sm.alive["wideRoadCameraState"] or not self.sm.valid["wideRoadCameraState"]:
       self.light_sensor = -1
 
-    # Update started state
-    self.started = self.sm["deviceState"].started and self.ignition
+    # Update started state. Parking test mode emulates the on-road HUD off-car
+    # without starting selfdrived or card.
+    self.started = ((self.sm["deviceState"].started and self.ignition) or
+                    (self.params.get_bool("ParkingTestMode") and not self.is_release))
 
     # Update body state
     if self.CP is not None and self.is_body != self.CP.notCar:
@@ -374,7 +376,7 @@ class Device:
         callback()
     self._prev_timed_out = interaction_timeout
 
-    self._set_awake(ui_state.ignition or not interaction_timeout or PC)
+    self._set_awake(ui_state.ignition or ui_state.started or not interaction_timeout or PC)
 
   def _set_awake(self, on: bool):
     if on != self._awake:

@@ -120,9 +120,10 @@ class AlertRenderer(Widget):
   def get_alert(self, sm: messaging.SubMaster) -> Alert | None:
     """Generate the current alert based on selfdrive state."""
     ss = sm['selfdriveState']
+    parking_test_mode = ui_state.params.get_bool("ParkingTestMode") and not ui_state.is_release
 
     # Check if selfdriveState messages have stopped arriving
-    if not sm.updated['selfdriveState']:
+    if not parking_test_mode and not sm.updated['selfdriveState']:
       recv_frame = sm.recv_frame['selfdriveState']
       time_since_onroad = time.monotonic() - ui_state.started_time
 
