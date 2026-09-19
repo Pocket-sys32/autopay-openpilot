@@ -92,7 +92,7 @@ class AndroidFormAdapter:
         (By.XPATH, "//*[@role='button' and .//*[normalize-space()='Submit']]"),
       ))
       mark_submitting()
-      submit.click()
+      driver.execute_script("arguments[0].click();", submit)
       try:
         wait.until(EC.text_to_be_present_in_element((By.TAG_NAME, "body"), CONFIRMATION_TEXT))
       except TimeoutException as exc:
