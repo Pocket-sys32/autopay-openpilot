@@ -234,6 +234,43 @@ class MiciHomeLayout(Widget):
       self._parking_camera_view.close()
       self._parking_camera_view = None
 
+    if parking_test_mode:
+      parking = ui_state.sm["parkingState"]
+      phase = parking.phase if ui_state.sm.seen["parkingState"] else "scanning"
+      titles = {
+        "scanning": "looking for parking QR",
+        "detected": "parking QR detected",
+        "countdown": "parking demo ready",
+        "sending": "sending parking demo",
+        "processing": "parking demo processing",
+        "completed": "demo completed",
+        "failed": "parking demo failed",
+        "unknown": "result unknown",
+        "action_required": "action required",
+      }
+      banner = rl.Rectangle(self.rect.x + 8, self.rect.y + self.rect.height - 150, self.rect.width - 16, 142)
+      banner_color = rl.Color(0, 105, 55, 225) if phase == "detected" else rl.Color(0, 0, 0, 205)
+      rl.draw_rectangle_rounded(banner, 0.12, 8, banner_color)
+      self._parking_label.set_text(titles.get(phase, "parking camera test"))
+      self._parking_label.set_position(banner.x + 8, banner.y + 8)
+      self._parking_label.render()
+      if phase == "scanning":
+        detail = "Hold the controlled QR steady in the road camera"
+      elif phase == "detected":
+        detail = "Exact QR confirmed · submissions disabled"
+      elif phase == "countdown" and parking.actionExpiresAtUnixMs:
+        now_ms = int(datetime.datetime.now(datetime.UTC).timestamp() * 1000)
+        remaining = max(0, (parking.actionExpiresAtUnixMs - now_ms + 999) // 1000)
+        detail = f"Submitting in {remaining}s · tap parking settings to cancel"
+      elif phase == "completed":
+        detail = "Demo completed — no parking purchased."
+      else:
+        detail = f"{parking.plateMasked} · {parking.durationSeconds // 3600} hour(s)"
+      self._parking_detail_label.set_text(detail)
+      self._parking_detail_label.set_position(banner.x + 8, banner.y + 72)
+      self._parking_detail_label.render()
+      return
+
     # TODO: why is there extra space here to get it to be flush?
     text_pos = rl.Vector2(self.rect.x - 2 + HOME_PADDING, self.rect.y - 16)
     self._openpilot_label.set_position(text_pos.x, text_pos.y)
