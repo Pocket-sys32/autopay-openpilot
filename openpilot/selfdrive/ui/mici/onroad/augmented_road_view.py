@@ -14,7 +14,7 @@ from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent, TextAlignment, TextAlignmentVertical
 from openpilot.system.ui.widgets.label import UnifiedLabel
 from openpilot.system.ui.widgets import Widget
-from openpilot.selfdrive.ui.mici.parking_overlay import parking_detail, parking_test_mode_active, parking_title, should_show_parking
+from openpilot.selfdrive.ui.mici.parking_overlay import parking_detail, parking_title, should_show_parking
 from openpilot.common.filter_simple import BounceFilter
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
@@ -185,9 +185,8 @@ class AugmentedRoadView(CameraView):
       super()._handle_mouse_release(mouse_pos)
 
   def _render(self, _):
-    # Draw text if not onroad. Parking test mode previews the real on-road HUD
-    # with simulated parked signals so the production overlay can be reviewed off-car.
-    if not ui_state.started and not parking_test_mode_active():
+    # Draw text if not onroad
+    if not ui_state.started:
       rl.draw_rectangle_rec(self.rect, rl.BLACK)
       self._offroad_label.render(self._rect)
       return
