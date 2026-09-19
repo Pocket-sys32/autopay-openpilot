@@ -249,15 +249,24 @@ class MiciHomeLayout(Widget):
         "action_required": "action required",
       }
       banner = rl.Rectangle(self.rect.x + 8, self.rect.y + self.rect.height - 150, self.rect.width - 16, 142)
-      banner_color = rl.Color(0, 105, 55, 225) if phase == "detected" else rl.Color(0, 0, 0, 205)
-      rl.draw_rectangle_rounded(banner, 0.12, 8, banner_color)
+      banner_colors = {
+        "detected": rl.Color(0, 105, 55, 225),
+        "countdown": rl.Color(150, 90, 0, 230),
+        "sending": rl.Color(20, 70, 140, 230),
+        "processing": rl.Color(20, 70, 140, 230),
+        "completed": rl.Color(0, 105, 55, 225),
+        "failed": rl.Color(140, 20, 20, 230),
+        "unknown": rl.Color(140, 80, 0, 230),
+        "action_required": rl.Color(140, 80, 0, 230),
+      }
+      rl.draw_rectangle_rounded(banner, 0.12, 8, banner_colors.get(phase, rl.Color(0, 0, 0, 205)))
       gui_label(rl.Rectangle(banner.x + 8, banner.y + 4, banner.width - 16, 62),
                 titles.get(phase, "parking camera test"), font_size=40, color=rl.WHITE,
                 font_weight=FontWeight.BOLD, alignment=TextAlignment.CENTER)
       if phase == "scanning":
         detail = "Hold the controlled QR steady in the road camera"
       elif phase == "detected":
-        detail = "Exact QR confirmed · submissions disabled"
+        detail = "Exact QR confirmed · waiting for parked signals"
       elif phase == "countdown" and parking.actionExpiresAtUnixMs:
         now_ms = int(datetime.datetime.now(datetime.UTC).timestamp() * 1000)
         remaining = max(0, (parking.actionExpiresAtUnixMs - now_ms + 999) // 1000)
