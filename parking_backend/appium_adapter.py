@@ -88,7 +88,9 @@ class AndroidFormAdapter:
         if driver.execute_script("return arguments[0].value;", textbox) != expected:
           raise FormChanged("form field verification failed")
 
-      submit = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[@role='button']//*[normalize-space()='Submit']/..")))
+      submit = wait.until(EC.element_to_be_clickable(
+        (By.XPATH, "//*[@role='button' and .//*[normalize-space()='Submit']]"),
+      ))
       mark_submitting()
       submit.click()
       try:
