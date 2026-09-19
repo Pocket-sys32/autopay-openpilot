@@ -1,7 +1,7 @@
 import unittest
 
-from openpilot.selfdrive.parking.candidate import (CONTROLLED_FORM_CANONICAL_URL, CONTROLLED_FORM_ID, CONTROLLED_FORM_URL, CandidateRejected,
-                                                   parse_candidate)
+from openpilot.selfdrive.parking.candidate import (CONTROLLED_DEMO_CODE, CONTROLLED_FORM_CANONICAL_URL, CONTROLLED_FORM_ID,
+                                                   CONTROLLED_FORM_URL, CandidateRejected, parse_candidate)
 from openpilot.selfdrive.parking.models import normalize_plate
 
 
@@ -14,6 +14,8 @@ class TestCandidate(unittest.TestCase):
     self.assertEqual(len(candidate.payload_sha256), 64)
     canonical = parse_candidate(CONTROLLED_FORM_CANONICAL_URL, observed_mono_ns=124)
     self.assertEqual(canonical.location_hint, CONTROLLED_FORM_ID)
+    compact = parse_candidate(CONTROLLED_DEMO_CODE, observed_mono_ns=125)
+    self.assertEqual(compact.location_hint, CONTROLLED_FORM_ID)
 
   def test_rejects_lookalikes_and_redirect_targets(self):
     rejected = (
@@ -22,6 +24,9 @@ class TestCandidate(unittest.TestCase):
       CONTROLLED_FORM_URL.replace("https", "http"),
       CONTROLLED_FORM_URL.replace("forms.gle", "forms.gle.attacker.example"),
       f" {CONTROLLED_FORM_URL}",
+      CONTROLLED_DEMO_CODE.upper(),
+      f"{CONTROLLED_DEMO_CODE}:other",
+      f" {CONTROLLED_DEMO_CODE}",
       "https://docs.google.com/forms/d/e/other/viewform",
       "javascript:alert(1)",
     )
