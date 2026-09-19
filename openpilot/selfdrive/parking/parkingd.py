@@ -91,7 +91,10 @@ class ParkingDaemon:
     self.params = params or Params()
     self.scanner = scanner or VisionQRScanner()
     configured_path = os.getenv("PARKING_JOURNAL_PATH")
-    self.journal_path = Path(journal_path or configured_path or (Path(Paths.persist_root()) / "parking" / "parking.db"))
+    params_path = self.params.get("ParkingJournalPath") or ""
+    self.journal_path = Path(
+      journal_path or configured_path or params_path or (Path(Paths.persist_root()) / "parking" / "parking.db"),
+    )
     self.sm = sm or messaging.SubMaster(["carState", "pandaStates"])
     self.pm = pm or messaging.PubMaster(["parkingState"])
     self.consensus = CandidateConsensus()
@@ -122,7 +125,11 @@ class ParkingDaemon:
     if self._backend_override is not None:
       return self._backend_override
     base_url = self.params.get("ParkingBackendBaseUrl") or ""
-    token_path = Path(os.getenv("PARKING_BACKEND_TOKEN_PATH", str(Path(Paths.persist_root()) / "parking" / "device-token")))
+    configured_token_path = self.params.get("ParkingBackendTokenPath") or ""
+    token_path = Path(os.getenv(
+      "PARKING_BACKEND_TOKEN_PATH",
+      configured_token_path or str(Path(Paths.persist_root()) / "parking" / "device-token"),
+    ))
     try:
       token = token_path.read_text(encoding="ascii").strip() if token_path.is_file() and token_path.stat().st_mode & 0o077 == 0 else ""
     except OSError:
