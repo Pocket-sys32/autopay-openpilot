@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 import secrets
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 import requests
 
@@ -36,8 +36,18 @@ def main() -> None:
     "state": state,
   })
   print(f"Open this URL and authorize pocketsfast@gmail.com:\n\n{AUTH_ENDPOINT}?{query}\n")
-  print("After Google redirects to localhost, copy the code query parameter from the browser address bar.")
-  code = input("Authorization code: ").strip()
+  print("After Google redirects to localhost, copy the entire browser address.")
+  authorization_result = input("Redirect URL or authorization code: ").strip()
+  if "://" in authorization_result:
+    redirect_query = parse_qs(urlsplit(authorization_result).query)
+    if redirect_query.get("state") != [state]:
+      raise RuntimeError("OAuth redirect state did not match")
+    codes = redirect_query.get("code", [])
+    if len(codes) != 1:
+      raise RuntimeError("OAuth redirect did not contain exactly one authorization code")
+    code = codes[0]
+  else:
+    code = unquote(authorization_result)
   response = requests.post(TOKEN_ENDPOINT, data={
     "client_id": client["client_id"],
     "client_secret": client["client_secret"],
