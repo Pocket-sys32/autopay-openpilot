@@ -84,6 +84,9 @@ class TestParkingIntent(unittest.TestCase):
     moving = evaluate_intent(IntentState(), evidence(10, v_ego_mps=1.0, standstill=False), config,
                              now_mono_ns=10, candidate_valid=True)
     self.assertEqual(moving.reason, IntentReason.VEHICLE_MOVING)
+    rolling = evaluate_intent(IntentState(), evidence(10, v_ego_mps=0.8, standstill=False), config,
+                              now_mono_ns=10, candidate_valid=True)
+    self.assertTrue(rolling.parked)
     no_park = evaluate_intent(IntentState(), evidence(10, gear="drive"), config,
                               now_mono_ns=10, candidate_valid=True)
     self.assertEqual(no_park.reason, IntentReason.PARK_GEAR_REQUIRED)

@@ -30,7 +30,8 @@ from openpilot.selfdrive.parking.qr_detector import CandidateConsensus, QRScan, 
 
 
 CANDIDATE_TTL_NS = 30_000_000_000
-COUNTDOWN_NS = 10_000_000_000
+COUNTDOWN_NS = 5_000_000_000
+ROLLING_SUBMIT_MPS = 0.894  # 2 mph
 POLL_INTERVAL_NS = 2_000_000_000
 SUPPORTED_DURATIONS = (3600, 7200)
 TERMINAL_REMOTE_STATES = frozenset({"succeeded", "failed", "expired", "action_required", "unknown"})
@@ -137,7 +138,7 @@ class ParkingDaemon:
     self.pm = pm or messaging.PubMaster(["parkingState"])
     self.consensus = CandidateConsensus()
     self.ignition_tracker = IgnitionEdgeTracker()
-    self.intent_config = IntentConfig(IntentProfile.AUTOMATIC)
+    self.intent_config = IntentConfig(IntentProfile.AUTOMATIC, stationary_speed_mps=ROLLING_SUBMIT_MPS)
     self.intent_state = IntentState()
     self.candidate = None
     self.candidate_ambiguous = False
@@ -169,6 +170,7 @@ class ParkingDaemon:
     ss_msg.selfdriveState.enabled = False
     ss_msg.selfdriveState.active = False
     ss_msg.selfdriveState.engageable = False
+    ss_msg.selfdriveState.experimentalMode = True
     self.pm.send("selfdriveState", ss_msg)
     cs_msg = messaging.new_message("carState")
     cs_msg.valid = True
@@ -468,7 +470,7 @@ class ParkingDaemon:
     if self._request is not None:
       if (self.result is not None and evidence.car_signal_usable(now_mono_ns=now_ns,
                                                                  maximum_age_ns=self.intent_config.evidence_maximum_age_ns) and
-          abs(evidence.v_ego_mps or 0.0) > 0.5):
+          abs(evidence.v_ego_mps or 0.0) > ROLLING_SUBMIT_MPS):
         self._reset_episode()
         self._publish(self._display(plate, now_ns, now_ms))
         return
@@ -482,7 +484,7 @@ class ParkingDaemon:
 
     if (self.episode_id and evidence.car_signal_usable(now_mono_ns=now_ns,
                                                        maximum_age_ns=self.intent_config.evidence_maximum_age_ns) and
-        abs(evidence.v_ego_mps or 0.0) > 0.5):
+        abs(evidence.v_ego_mps or 0.0) > ROLLING_SUBMIT_MPS):
       self._reset_episode()
     self._observe_camera(now_ns)
     decision = evaluate_intent(self.intent_state, evidence, self.intent_config, now_mono_ns=now_ns, candidate_valid=self._candidate_valid(now_ns))
@@ -529,13 +531,22 @@ class ParkingDaemon:
     self._publish(self._display(plate, now_ns, now_ms))
 
 
+def _configure_runtime(daemon: ParkingDaemon, test_mode: bool) -> None:
+  daemon.intent_config = IntentConfig(
+    IntentProfile.AUTOMATIC,
+    stationary_speed_mps=ROLLING_SUBMIT_MPS,
+    stationary_debounce_ns=0 if test_mode else 5_000_000_000,
+  )
+
+
 def main() -> None:
   params = Params()
   test_mode = parking_test_mode_enabled(params)
   daemon = ParkingDaemon(params=params, scanner=VisionQRScanner(prefer_wide=test_mode),
                          sm=SimulatedParkedSignals() if test_mode else None,
                          pm=parking_test_pubmaster(test_mode))
-  ratekeeper = Ratekeeper(2.0, print_delay_threshold=0.25)
+  _configure_runtime(daemon, test_mode)
+  ratekeeper = Ratekeeper(5.0 if test_mode else 2.0, print_delay_threshold=0.25)
   while True:
     try:
       requested_test_mode = parking_test_mode_enabled(params)
@@ -544,6 +555,8 @@ def main() -> None:
         daemon = ParkingDaemon(params=params, scanner=VisionQRScanner(prefer_wide=test_mode),
                                sm=SimulatedParkedSignals() if test_mode else None,
                                pm=parking_test_pubmaster(test_mode))
+        _configure_runtime(daemon, test_mode)
+        ratekeeper = Ratekeeper(5.0 if test_mode else 2.0, print_delay_threshold=0.25)
         cloudlog.warning(f"parking test mode {'enabled' if test_mode else 'disabled'}")
       daemon.step()
     except Exception:

@@ -19,7 +19,7 @@ class TestQRDetector(OpenpilotTestCase):
 
   def test_reports_conflicting_payloads(self):
     image = np.zeros((100, 200), dtype=np.uint8)
-    payloads = iter(("one", "two", None, None))
+    payloads = iter(("one", "two", None, None, None, None))
     scan = scan_gray(image, decoder=lambda _: next(payloads), observed_mono_ns=10)
     self.assertTrue(scan.ambiguous)
     self.assertEqual(scan.payloads, ("one", "two"))

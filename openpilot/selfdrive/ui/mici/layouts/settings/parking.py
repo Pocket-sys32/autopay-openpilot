@@ -3,6 +3,7 @@ import unicodedata
 
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigMultiToggle, BigParamControl, GreyBigButton
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigDialog, BigInputDialog
+from openpilot.selfdrive.ui.mici.parking_overlay import parking_test_mode_active
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.widgets.scroller import NavScroller
@@ -62,7 +63,15 @@ class ParkingLayoutMici(NavScroller):
       toggle_callback=self._on_auto_pay_toggled,
       description="Automatically run the controlled parking demo after a supported parking code and parked state are detected.",
     )
-    self._auto_pay_toggle.set_enabled(lambda: ui_state.is_offroad())
+    self._auto_pay_toggle.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
+
+    self._test_mode_toggle = None
+    if not ui_state.is_release:
+      self._test_mode_toggle = BigParamControl(
+        "simulate on-road",
+        "ParkingTestMode",
+        description="Off-car proof of the driving HUD: live cameras, fake parked car signals, and the real parking demo flow. Not available on release builds.",
+      )
 
     self._environment = GreyBigButton(
       "environment",
@@ -76,7 +85,7 @@ class ParkingLayoutMici(NavScroller):
       description="Enter the plate shown on the vehicle. Spaces and punctuation are removed, and letters are stored in uppercase.",
     )
     self._plate_button.set_click_callback(self._edit_plate)
-    self._plate_button.set_enabled(lambda: ui_state.is_offroad())
+    self._plate_button.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
 
     self._country_button = BigButton(
       "plate country",
@@ -84,7 +93,7 @@ class ParkingLayoutMici(NavScroller):
       description="Two-letter ISO country code for the license plate, such as US or CA.",
     )
     self._country_button.set_click_callback(self._edit_country)
-    self._country_button.set_enabled(lambda: ui_state.is_offroad())
+    self._country_button.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
 
     self._region_button = BigButton(
       "plate region",
@@ -92,15 +101,16 @@ class ParkingLayoutMici(NavScroller):
       description="Optional state, province, or region used by a parking provider to identify the plate.",
     )
     self._region_button.set_click_callback(self._edit_region)
-    self._region_button.set_enabled(lambda: ui_state.is_offroad())
+    self._region_button.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
 
     self._duration = BigMultiToggle(
       "default duration",
       list(DURATION_OPTIONS),
       select_callback=self._set_duration,
-      description="Select one or two hours. Changing this during the countdown restarts the ten-second countdown.",
+      description="Select one or two hours. Changing this during the countdown restarts the five-second countdown.",
     )
-    self._duration.set_enabled(lambda: ui_state.is_offroad() or bool(ui_state.sm["carState"].standstill))
+    self._duration.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active() or
+                               bool(ui_state.sm["carState"].standstill))
 
     self._cancel = BigButton(
       "cancel this stop",
@@ -108,7 +118,7 @@ class ParkingLayoutMici(NavScroller):
       description="Cancel the current detected parking episode. A new stop can trigger a new attempt.",
     )
     self._cancel.set_click_callback(self._cancel_episode)
-    self._cancel.set_enabled(lambda: bool(ui_state.sm["carState"].standstill) and
+    self._cancel.set_enabled(lambda: (parking_test_mode_active() or bool(ui_state.sm["carState"].standstill)) and
                             ui_state.sm["parkingState"].phase == "countdown")
 
     self._live_status = GreyBigButton(
@@ -123,8 +133,12 @@ class ParkingLayoutMici(NavScroller):
       gui_app.texture("icons_mici/setup/green_info.png", 64, 64),
     )
 
-    self._scroller.add_widgets([
+    widgets = [
       self._auto_pay_toggle,
+    ]
+    if self._test_mode_toggle is not None:
+      widgets.append(self._test_mode_toggle)
+    widgets.extend([
       self._environment,
       self._plate_button,
       self._country_button,
@@ -134,6 +148,7 @@ class ParkingLayoutMici(NavScroller):
       self._latest_result,
       self._live_status,
     ])
+    self._scroller.add_widgets(widgets)
 
     ui_state.add_offroad_transition_callback(self._refresh)
     self._refresh()
@@ -164,6 +179,8 @@ class ParkingLayoutMici(NavScroller):
   def _refresh(self):
     ui_state.update_params()
     self._auto_pay_toggle.refresh()
+    if self._test_mode_toggle is not None:
+      self._test_mode_toggle.refresh()
     self._plate_button.set_value(ui_state.params.get("ParkingLicensePlate") or "not set")
     self._country_button.set_value(ui_state.params.get("ParkingPlateCountry") or "not set")
     self._region_button.set_value(ui_state.params.get("ParkingPlateRegion") or "not set")

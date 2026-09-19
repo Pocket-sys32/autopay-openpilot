@@ -14,7 +14,7 @@ from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent, TextAlignment, TextAlignmentVertical
 from openpilot.system.ui.widgets.label import UnifiedLabel
 from openpilot.system.ui.widgets import Widget
-from openpilot.selfdrive.ui.mici.parking_overlay import parking_detail, parking_title, should_show_parking
+from openpilot.selfdrive.ui.mici.parking_overlay import parking_detail, parking_test_mode_active, parking_title, should_show_parking
 from openpilot.common.filter_simple import BounceFilter
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
@@ -158,9 +158,10 @@ class AugmentedRoadView(CameraView):
                                        alignment=TextAlignment.CENTER,
                                        alignment_vertical=TextAlignmentVertical.MIDDLE)
     self._parking_label = UnifiedLabel("", font_size=48, font_weight=FontWeight.BOLD, max_width=470, wrap_text=True,
-                                       alignment=TextAlignment.CENTER)
-    self._parking_detail_label = UnifiedLabel("", font_size=32, text_color=rl.LIGHTGRAY, font_weight=FontWeight.ROMAN,
-                                              max_width=470, wrap_text=True, alignment=TextAlignment.CENTER)
+                                       text_color=rl.Color(255, 255, 255, 230), alignment=TextAlignment.CENTER)
+    self._parking_detail_label = UnifiedLabel("", font_size=32, text_color=rl.Color(220, 220, 220, 230),
+                                              font_weight=FontWeight.ROMAN, max_width=470, wrap_text=True,
+                                              alignment=TextAlignment.CENTER)
 
     self._fade_texture = gui_app.texture("icons_mici/onroad/onroad_fade.png")
 
@@ -238,6 +239,8 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer.render(self._content_rect)
 
     if should_show_parking():
+      banner = rl.Rectangle(self._content_rect.x + 8, self._content_rect.y + 188, 470, 150)
+      rl.draw_rectangle_rounded(banner, 0.12, 8, rl.Color(0, 0, 0, 170))
       self._parking_label.set_text(parking_title())
       self._parking_label.set_position(self._content_rect.x + 8, self._content_rect.y + 205)
       self._parking_label.render()
@@ -258,7 +261,9 @@ class AugmentedRoadView(CameraView):
     self._bookmark_icon.render(self.rect)
 
   def _switch_stream_if_needed(self, sm):
-    if sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
+    if parking_test_mode_active() and WIDE_CAM in self.available_streams:
+      target = WIDE_CAM
+    elif sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
       v_ego = sm['carState'].vEgo
       if v_ego < WIDE_CAM_MAX_SPEED:
         target = WIDE_CAM

@@ -30,7 +30,7 @@ class IntentReason(StrEnum):
 @dataclass(frozen=True, slots=True)
 class IntentConfig:
   profile: IntentProfile
-  stationary_speed_mps: float = 0.2
+  stationary_speed_mps: float = 0.894  # 2 mph rolling submit
   stationary_debounce_ns: int = 5_000_000_000
   evidence_maximum_age_ns: int = 1_000_000_000
 
@@ -61,7 +61,7 @@ def evaluate_intent(state: IntentState, evidence: VehicleEvidence, config: Inten
   if not evidence.car_signal_usable(now_mono_ns=now_mono_ns, maximum_age_ns=config.evidence_maximum_age_ns):
     return IntentDecision(state if state.confirmed else IntentState(), False, IntentReason.STALE_VEHICLE_EVIDENCE)
   assert evidence.v_ego_mps is not None
-  if abs(evidence.v_ego_mps) >= config.stationary_speed_mps or evidence.standstill is False:
+  if abs(evidence.v_ego_mps) >= config.stationary_speed_mps:
     return IntentDecision(IntentState(), False, IntentReason.VEHICLE_MOVING)
 
   if state.confirmed:
