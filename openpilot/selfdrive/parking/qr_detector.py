@@ -7,6 +7,7 @@ import time
 
 import numpy as np
 
+from openpilot.cereal.visionipc import VisionStreamType
 from openpilot.common import qrcode
 
 
@@ -103,21 +104,21 @@ class VisionQRScanner:
 
   SCAN_INTERVAL_NS = int(1e9)
 
-  def __init__(self):
+  def __init__(self, *, prefer_wide: bool = False):
     self._client = None
     self._stream_type = None
     self._last_scan_mono_ns = 0
+    self._preferred_streams = (
+      (VisionStreamType.VISION_STREAM_WIDE_ROAD, VisionStreamType.VISION_STREAM_NARROW_ROAD)
+      if prefer_wide else
+      (VisionStreamType.VISION_STREAM_NARROW_ROAD, VisionStreamType.VISION_STREAM_WIDE_ROAD)
+    )
 
   def _connect(self) -> bool:
     from msgq.visionipc import VisionIpcClient
-    from openpilot.cereal.visionipc import VisionStreamType
 
     available = VisionIpcClient.available_streams("camerad", block=False)
-    preferred = (
-      VisionStreamType.VISION_STREAM_NARROW_ROAD,
-      VisionStreamType.VISION_STREAM_WIDE_ROAD,
-    )
-    stream_type = next((stream for stream in preferred if stream in available), None)
+    stream_type = next((stream for stream in self._preferred_streams if stream in available), None)
     if stream_type is None:
       return False
     if self._client is not None and self._stream_type == stream_type and self._client.is_connected():

@@ -228,7 +228,7 @@ class MiciHomeLayout(Widget):
                          not ui_state.params.get_bool("IsReleaseBranch"))
     if parking_test_mode:
       if self._parking_camera_view is None:
-        self._parking_camera_view = CameraView("camerad", VisionStreamType.VISION_STREAM_NARROW_ROAD)
+        self._parking_camera_view = CameraView("camerad", VisionStreamType.VISION_STREAM_WIDE_ROAD)
       self._parking_camera_view.render(self.rect)
     elif self._parking_camera_view is not None:
       self._parking_camera_view.close()
@@ -251,9 +251,9 @@ class MiciHomeLayout(Widget):
       banner = rl.Rectangle(self.rect.x + 8, self.rect.y + self.rect.height - 150, self.rect.width - 16, 142)
       banner_color = rl.Color(0, 105, 55, 225) if phase == "detected" else rl.Color(0, 0, 0, 205)
       rl.draw_rectangle_rounded(banner, 0.12, 8, banner_color)
-      self._parking_label.set_text(titles.get(phase, "parking camera test"))
-      self._parking_label.set_position(banner.x + 8, banner.y + 8)
-      self._parking_label.render()
+      gui_label(rl.Rectangle(banner.x + 8, banner.y + 4, banner.width - 16, 62),
+                titles.get(phase, "parking camera test"), font_size=40, color=rl.WHITE,
+                font_weight=FontWeight.BOLD, alignment=TextAlignment.CENTER)
       if phase == "scanning":
         detail = "Hold the controlled QR steady in the road camera"
       elif phase == "detected":
@@ -266,9 +266,8 @@ class MiciHomeLayout(Widget):
         detail = "Demo completed — no parking purchased."
       else:
         detail = f"{parking.plateMasked} · {parking.durationSeconds // 3600} hour(s)"
-      self._parking_detail_label.set_text(detail)
-      self._parking_detail_label.set_position(banner.x + 8, banner.y + 72)
-      self._parking_detail_label.render()
+      gui_label(rl.Rectangle(banner.x + 8, banner.y + 70, banner.width - 16, 56),
+                detail, font_size=26, color=rl.WHITE, alignment=TextAlignment.CENTER)
       return
 
     # TODO: why is there extra space here to get it to be flush?

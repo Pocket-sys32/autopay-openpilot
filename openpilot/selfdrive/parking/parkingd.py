@@ -501,14 +501,16 @@ class ParkingDaemon:
 def main() -> None:
   params = Params()
   test_mode = parking_test_mode_enabled(params)
-  daemon = ParkingDaemon(params=params, sm=SimulatedParkedSignals() if test_mode else None)
+  daemon = ParkingDaemon(params=params, scanner=VisionQRScanner(prefer_wide=test_mode),
+                         sm=SimulatedParkedSignals() if test_mode else None)
   ratekeeper = Ratekeeper(2.0, print_delay_threshold=0.25)
   while True:
     try:
       requested_test_mode = parking_test_mode_enabled(params)
       if requested_test_mode != test_mode:
         test_mode = requested_test_mode
-        daemon = ParkingDaemon(params=params, sm=SimulatedParkedSignals() if test_mode else None)
+        daemon = ParkingDaemon(params=params, scanner=VisionQRScanner(prefer_wide=test_mode),
+                               sm=SimulatedParkedSignals() if test_mode else None)
         cloudlog.warning(f"parking test mode {'enabled' if test_mode else 'disabled'}")
       daemon.step()
     except Exception:
