@@ -138,14 +138,19 @@ class LazAdapter:
     driver.set_page_load_timeout(30)
     try:
       driver.get(ENTRY_URL)
-      if self.flaresolverr_url:
+      if self.flaresolverr_url and os.getenv("PARKING_LAZ_INJECT_CF_COOKIES") == "1":  # cf_clearance is bound to the solver's browser, so off by default
         for cookie in self._solve_cloudflare(ENTRY_URL).get("cookies", []):
           try:
             driver.add_cookie({"name": cookie["name"], "value": cookie["value"], "path": cookie.get("path", "/")})
           except Exception:
             pass  # cookies for other domains cannot be set on this page
         driver.get(ENTRY_URL)
-      self._wait(lambda: driver.execute_script("return !!document.getElementById('buyNowSearch')"), "GO button")
+      self._stamp = time.strftime("%Y%m%dT%H%M%S")
+      try:
+        self._wait(lambda: driver.execute_script("return !!document.getElementById('buyNowSearch')"), "GO button", timeout=60)
+      except FormChanged:
+        self._snapshot(driver, "0-no-go-button")
+        raise
       if SITE_CODE not in driver.find_element(By.TAG_NAME, "body").text:
         raise FormChanged("unexpected LAZ location")
       if urlparse_host(driver.current_url) != CHECKOUT_HOST:
