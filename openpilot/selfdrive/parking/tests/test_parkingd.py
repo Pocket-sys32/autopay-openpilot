@@ -86,7 +86,7 @@ class TestParkingDaemonEvidence(OpenpilotTestCase):
     evidence = vehicle_evidence_from_sm(SimulatedParkedSignals(), IgnitionEdgeTracker(), time.monotonic_ns())
     self.assertTrue(evidence.standstill)
     self.assertTrue(evidence.parking_brake)
-    self.assertEqual(evidence.gear, car.CarState.GearShifter.park)
+    self.assertEqual(evidence.gear, "park")
 
   def test_fresh_known_panda_produces_explicit_off_edge(self):
     tracker = IgnitionEdgeTracker()
