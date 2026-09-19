@@ -5,7 +5,8 @@ import unittest
 
 from parking_backend.config import Settings
 from parking_backend.gmail import EmailDeliveryUnknown
-from parking_backend.store import ParkingStore
+from parking_backend.laz_adapter import PaymentDeclined
+from parking_backend.store import InvalidAttempt, ParkingStore
 from parking_backend.tests.test_store import request
 from parking_backend.worker import Worker
 
@@ -47,7 +48,7 @@ class TestWorker(unittest.TestCase):
     self.directory = tempfile.TemporaryDirectory()
     database = Path(self.directory.name) / "parking.db"
     self.settings = Settings(database, "token", "comma", "http://127.0.0.1:4723", "from@example.com", "to@example.com",
-                             "", "", "", "4242", "123", "12/30", "95616")
+                             "", "", "", "4242", "123", "12/30", "95616", False, "", "", "")
     self.store = ParkingStore(database)
 
   def tearDown(self):
@@ -95,6 +96,53 @@ class TestWorker(unittest.TestCase):
     assert result is not None
     self.assertEqual(result["email_status"], "unknown")
     self.assertIsNone(self.store.next_email(now_ms=now_ms + 3_600_000))
+
+
+def laz_request() -> dict[str, object]:
+  payload = request()
+  payload.update({"provider_id": "laz_ttp", "form_id": "143245", "duration_seconds": 10800,
+                  "payer_first_name": "Ada", "payer_last_name": "Lovelace", "name_on_card": "Ada Lovelace"})
+  payload["dispatch_deadline_unix_ms"] = time.time_ns() // 1_000_000 + 30_000
+  return payload
+
+
+class DecliningAdapter(FakeAdapter):
+  def submit(self, payload, *, mark_submitting):
+    self.calls += 1
+    mark_submitting()
+    raise PaymentDeclined("declined")
+
+
+class TestLazWorker(TestWorker):
+  def test_declined_card_is_a_definitive_failure_without_retry(self):
+    self.store.put_attempt("comma", laz_request(), now_ms=time.time_ns() // 1_000_000)
+    adapter = DecliningAdapter()
+    worker = Worker(self.settings, self.store, {"laz_ttp": adapter}, FakeEmail())
+    worker.process_once()
+    result = self.store.get_attempt("comma", "attempt-1")
+    assert result is not None
+    self.assertEqual((result["state"], result["reason_code"]), ("failed", "PAYMENT_DECLINED"))
+    self.assertFalse(result["demo"])
+    self.assertEqual(adapter.calls, 1)
+    self.assertIsNone(self.store.claim_next(now_ms=time.time_ns() // 1_000_000 + 5_000))
+
+  def test_laz_attempt_needs_the_provider_to_be_enabled(self):
+    self.store.put_attempt("comma", laz_request(), now_ms=time.time_ns() // 1_000_000)
+    worker = Worker(self.settings, self.store, FakeAdapter(), FakeEmail())  # demo adapter only
+    worker.process_once()
+    result = self.store.get_attempt("comma", "attempt-1")
+    assert result is not None
+    self.assertEqual(result["state"], "action_required")
+
+  def test_laz_payload_requires_valid_payer_names(self):
+    bad = laz_request()
+    bad["payer_first_name"] = "Ada<script>"
+    with self.assertRaises(InvalidAttempt):
+      self.store.put_attempt("comma", bad, now_ms=time.time_ns() // 1_000_000)
+    missing = laz_request()
+    del missing["name_on_card"]
+    with self.assertRaises(InvalidAttempt):
+      self.store.put_attempt("comma", missing, now_ms=time.time_ns() // 1_000_000)
 
 
 if __name__ == "__main__":

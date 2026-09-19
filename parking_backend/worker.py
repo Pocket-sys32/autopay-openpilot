@@ -9,8 +9,9 @@ from typing import Protocol, cast
 from parking_backend.appium_adapter import AndroidFormAdapter, FormChanged, SubmissionUnknown
 from parking_backend.config import Settings
 from parking_backend.gmail import EmailDeliveryUnknown, GmailSender
+from parking_backend.laz_adapter import LazAdapter, LazProfile, PaymentDeclined, ReservationRejected
 from parking_backend.provider import ProviderAdapter
-from parking_backend.store import ParkingStore
+from parking_backend.store import LAZ_PROVIDER_ID, ParkingStore
 
 
 class AutomationTimeout(TimeoutError):
@@ -36,10 +37,11 @@ def automation_deadline(seconds: int):
 
 
 class Worker:
-  def __init__(self, settings: Settings, store: ParkingStore, adapter: ProviderAdapter, email: ResultEmailSender):
+  def __init__(self, settings: Settings, store: ParkingStore, adapter: ProviderAdapter | dict[str, ProviderAdapter],
+               email: ResultEmailSender):
     self.settings = settings
     self.store = store
-    self.adapter = adapter
+    self.adapters = adapter if isinstance(adapter, dict) else {"demo_google_form": adapter}
     self.email = email
 
   def process_once(self) -> bool:
@@ -52,17 +54,27 @@ class Worker:
     if not isinstance(duration_value, int) or isinstance(duration_value, bool):
       self.store.complete(attempt_id, "failed", "INVALID_STORED_REQUEST", {"demo": True, "message": "Invalid duration."})
       return True
+    provider_id = str(request.get("provider_id", ""))
+    is_laz = provider_id == LAZ_PROVIDER_ID
     try:
-      if not self.adapter.validate_location(str(request["form_id"])):
+      adapter = self.adapters.get(provider_id)
+      if adapter is None:
+        raise FormChanged("provider is not enabled on this backend")
+      if not adapter.validate_location(str(request["form_id"])):
         raise FormChanged("provider location is no longer allowlisted")
-      self.adapter.get_quote(location_id=str(request["form_id"]), plate=str(request["plate"]),
-                             duration_seconds=duration_value)
+      adapter.get_quote(location_id=str(request["form_id"]), plate=str(request["plate"]),
+                        duration_seconds=duration_value)
       with automation_deadline(120):
-        result = self.adapter.submit(
+        result = adapter.submit(
           request,
           mark_submitting=lambda: self._mark_submitting(attempt_id),
         )
-      self.store.complete(attempt_id, "succeeded", "DEMO_FORM_CONFIRMED", result)
+      self.store.complete(attempt_id, "succeeded", "PARKING_PAID" if is_laz else "DEMO_FORM_CONFIRMED", result)
+    except ReservationRejected:
+      self.store.complete(attempt_id, "failed", "RESERVATION_REJECTED",
+                          {"demo": False, "message": "LAZ rejected the reservation. Nothing was purchased."})
+    except PaymentDeclined:
+      self.store.complete(attempt_id, "failed", "PAYMENT_DECLINED", {"demo": False, "message": "Payment declined. Nothing was purchased."})
     except FormChanged as exc:
       self.store.complete(attempt_id, "action_required", "FORM_CHANGED", {"demo": True, "message": str(exc)})
     except SubmissionUnknown as exc:
@@ -100,16 +112,28 @@ def main() -> None:
   settings = Settings.from_environment()
   store = ParkingStore(settings.database_path)
   store.recover_interrupted()
-  worker = Worker(
-    settings,
-    store,
-    AndroidFormAdapter(
+  adapters: dict[str, ProviderAdapter] = {
+    "demo_google_form": AndroidFormAdapter(
       settings.appium_url,
       card_number=settings.test_card_number,
       cvv=settings.test_card_cvv,
       expiration=settings.test_card_expiration,
       zip_code=settings.test_zip_code,
     ),
+  }
+  if settings.laz_enabled:
+    adapters[LAZ_PROVIDER_ID] = LazAdapter(
+      settings.appium_url,
+      card_number=settings.laz_card_number,
+      cvv=settings.laz_card_cvv,
+      expiration=settings.laz_card_expiration.replace("/", ""),
+      profile=LazProfile.from_environment(),
+      flaresolverr_url=settings.flaresolverr_url,
+    )
+  worker = Worker(
+    settings,
+    store,
+    adapters,
     GmailSender(
       sender=settings.gmail_sender,
       recipient=settings.gmail_recipient,
