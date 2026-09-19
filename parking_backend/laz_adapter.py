@@ -127,6 +127,9 @@ class LazAdapter:
     from appium.options.android import UiAutomator2Options
     from selenium.webdriver.common.by import By
 
+    # cf_clearance is bound to the IP and user agent it was issued for, so the browser must present the solver's user agent.
+    solution = (self._solve_cloudflare(ENTRY_URL)
+                if self.flaresolverr_url and os.getenv("PARKING_LAZ_INJECT_CF_COOKIES") == "1" else None)
     options = UiAutomator2Options()
     options.platform_name = "Android"
     options.browser_name = "Chrome"
@@ -134,23 +137,29 @@ class LazAdapter:
     options.set_capability("appium:newCommandTimeout", 150)
     options.set_capability("appium:noReset", True)
     options.set_capability("appium:chromedriverExecutable", CHROMEDRIVER_PATH)
+    if solution and solution.get("userAgent"):
+      options.set_capability("appium:chromeOptions", {"args": [f"--user-agent={solution['userAgent']}"]})
     driver = webdriver.Remote(self.appium_url, options=options)
     driver.set_page_load_timeout(30)
     try:
       driver.get(ENTRY_URL)
-      if self.flaresolverr_url and os.getenv("PARKING_LAZ_INJECT_CF_COOKIES") == "1":  # cf_clearance is bound to the solver's browser, so off by default
-        for cookie in self._solve_cloudflare(ENTRY_URL).get("cookies", []):
+      if solution:
+        for cookie in solution.get("cookies", []):
           try:
             driver.add_cookie({"name": cookie["name"], "value": cookie["value"], "path": cookie.get("path", "/")})
           except Exception:
             pass  # cookies for other domains cannot be set on this page
         driver.get(ENTRY_URL)
       self._stamp = time.strftime("%Y%m%dT%H%M%S")
-      try:
-        self._wait(lambda: driver.execute_script("return !!document.getElementById('buyNowSearch')"), "GO button", timeout=60)
-      except FormChanged:
-        self._snapshot(driver, "0-no-go-button")
-        raise
+      for reload_left in (1, 0):  # Cloudflare's verification page sometimes sticks until the page is reloaded
+        try:
+          self._wait(lambda: driver.execute_script("return !!document.getElementById('buyNowSearch')"), "GO button", timeout=30)
+          break
+        except FormChanged:
+          self._snapshot(driver, "0-no-go-button")
+          if not reload_left:
+            raise
+          driver.get(ENTRY_URL)
       if SITE_CODE not in driver.find_element(By.TAG_NAME, "body").text:
         raise FormChanged("unexpected LAZ location")
       if urlparse_host(driver.current_url) != CHECKOUT_HOST:
@@ -192,6 +201,7 @@ class LazAdapter:
       time.sleep(2)  # give any late re-render a chance to clear a field before it is re-checked
       self._verify_fields(driver)
       self._snapshot(driver, "1-before-pay", screenshot=False)
+      self._hook_network(driver)
       mark_submitting()
       driver.execute_script("arguments[0].click()", pay)
       return self._read_outcome(driver, total)
@@ -337,6 +347,7 @@ class LazAdapter:
         raise PaymentDeclined("card was declined")
       if any(marker in text.lower() for marker in RESERVATION_MARKERS):
         self._snapshot(driver, "5-reservation-rejected")
+        self._dump_network(driver)
         raise ReservationRejected("LAZ rejected the reservation")
       if "PAY $" not in text and "receipt" in text.lower():
         return {"demo": False, "message": "Parking purchased.", "total_minor": total_minor,
@@ -346,6 +357,35 @@ class LazAdapter:
     raise SubmissionUnknown("payment outcome was not observed")
 
   _stamp = "run"
+
+  @staticmethod
+  def _hook_network(driver) -> None:
+    """Record the page's own fetch/XHR calls (URL, status, short response) so a rejected reservation can be explained."""
+    try:
+      driver.execute_script("""
+        if (window.__net) return; window.__net = [];
+        const keep = (m, u, s, t) => window.__net.push([m, String(u).slice(0, 200), s, String(t).slice(0, 400)]);
+        const f = window.fetch;
+        window.fetch = function(u, o) { const m = (o && o.method) || 'GET';
+          return f.apply(this, arguments).then(r => { r.clone().text().then(t => keep(m, r.url || u, r.status, t)); return r; },
+                                                 e => { keep(m, u, 0, String(e)); throw e; }); };
+        const open = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(m, u) { this.addEventListener('loadend', () => keep(m, u, this.status, this.responseText)); return open.apply(this, arguments); };
+      """)
+    except Exception:
+      pass  # diagnostics must never change the recorded outcome
+
+  def _dump_network(self, driver) -> None:
+    from pathlib import Path
+
+    try:
+      rows = driver.execute_script("return window.__net || []")
+      directory = Path(os.getenv("PARKING_DIAG_DIR", "/var/lib/parking-demo/diag"))
+      directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+      lines = [re.sub(r"\d{12,19}", "[number]", f"{m} {u} -> {s}: {t}") for m, u, s, t in rows]
+      (directory / f"{self._stamp}-6-network.txt").write_text("\n".join(lines) + "\n")
+    except Exception:
+      pass  # diagnostics must never change the recorded outcome
 
   def _snapshot(self, driver, label: str, *, screenshot: bool = True) -> None:
     """Record page text, visible validation messages and (optionally) a screenshot. Long digit runs are scrubbed."""
