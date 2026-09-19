@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import os
 import time
 
 
@@ -8,6 +9,7 @@ FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfsn3xRdGLVcJXyoSBccSGiPYMi
 FORM_TITLE = "Comma Hack 7 Parking"
 CONFIRMATION_TEXT = "Your response has been recorded."
 FORM_ID = "1FAIpQLSfsn3xRdGLVcJXyoSBccSGiPYMi_fCqja-0Iay87If5Ncmu_Q"
+CHROMEDRIVER_PATH = os.getenv("PARKING_CHROMEDRIVER_PATH", "/opt/android-sdk/chromedriver/chromedriver")
 
 
 class FormChanged(RuntimeError):
@@ -55,6 +57,7 @@ class AndroidFormAdapter:
     options.automation_name = "UiAutomator2"
     options.set_capability("appium:newCommandTimeout", 150)
     options.set_capability("appium:noReset", True)
+    options.set_capability("appium:chromedriverExecutable", CHROMEDRIVER_PATH)
     driver = webdriver.Remote(self.appium_url, options=options)
     driver.set_page_load_timeout(30)
     try:

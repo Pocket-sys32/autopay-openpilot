@@ -6,7 +6,8 @@ After=network-online.target
 User=parking-demo
 Group=kvm
 Environment=ANDROID_HOME=/opt/android-sdk
-ExecStart=/opt/android-sdk/emulator/emulator -avd parking-demo -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -accel on
+Environment=HOME=/home/parking-demo
+ExecStart=/opt/android-sdk/emulator/emulator -avd parking-demo -no-window -no-audio -no-boot-anim -no-snapshot -no-metrics -gpu swiftshader_indirect -accel on
 Restart=on-failure
 TimeoutStartSec=180
 

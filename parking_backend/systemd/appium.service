@@ -7,6 +7,7 @@ User=parking-demo
 Group=parking-demo
 WorkingDirectory=/opt/parking-demo
 Environment=ANDROID_HOME=/opt/android-sdk
+Environment=HOME=/home/parking-demo
 ExecStart=/opt/parking-demo/npm/bin/appium --address 127.0.0.1 --port 4723
 Restart=on-failure
 
