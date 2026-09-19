@@ -14,7 +14,7 @@ from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent, TextAlignment, TextAlignmentVertical
 from openpilot.system.ui.widgets.label import UnifiedLabel
 from openpilot.system.ui.widgets import Widget
-from openpilot.selfdrive.ui.mici.parking_overlay import parking_detail, parking_test_mode_active, parking_title, should_show_parking
+from openpilot.selfdrive.ui.mici.parking_overlay import draw_parking_banner, parking_test_mode_active
 from openpilot.common.filter_simple import BounceFilter
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
@@ -157,11 +157,6 @@ class AugmentedRoadView(CameraView):
                                        text_color=rl.Color(255, 255, 255, int(255 * 0.9)),
                                        alignment=TextAlignment.CENTER,
                                        alignment_vertical=TextAlignmentVertical.MIDDLE)
-    self._parking_label = UnifiedLabel("", font_size=48, font_weight=FontWeight.BOLD, max_width=470, wrap_text=True,
-                                       text_color=rl.Color(255, 255, 255, 230), alignment=TextAlignment.CENTER)
-    self._parking_detail_label = UnifiedLabel("", font_size=32, text_color=rl.Color(220, 220, 220, 230),
-                                              font_weight=FontWeight.ROMAN, max_width=470, wrap_text=True,
-                                              alignment=TextAlignment.CENTER)
 
     self._fade_texture = gui_app.texture("icons_mici/onroad/onroad_fade.png")
 
@@ -237,16 +232,7 @@ class AugmentedRoadView(CameraView):
                                                alert_to_render.visual_alert == car.CarControl.HUDControl.VisualAlert.steerRequired)
     self._alert_renderer.render(self._content_rect)
     self._hud_renderer.render(self._content_rect)
-
-    if should_show_parking():
-      banner = rl.Rectangle(self._content_rect.x + 8, self._content_rect.y + 188, 470, 150)
-      rl.draw_rectangle_rounded(banner, 0.12, 8, rl.Color(0, 0, 0, 170))
-      self._parking_label.set_text(parking_title())
-      self._parking_label.set_position(self._content_rect.x + 8, self._content_rect.y + 205)
-      self._parking_label.render()
-      self._parking_detail_label.set_text(parking_detail())
-      self._parking_detail_label.set_position(self._content_rect.x + 8, self._content_rect.y + 275)
-      self._parking_detail_label.render()
+    draw_parking_banner(self._content_rect.x, self._content_rect.y)
 
     # Draw fake rounded border
     rl.draw_rectangle_rounded_lines_ex(self._content_rect, 0.2 * 1.02, 10, 50, rl.BLACK)

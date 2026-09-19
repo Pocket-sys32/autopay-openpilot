@@ -12,7 +12,7 @@ from openpilot.system.ui.widgets.layouts import HBoxLayout
 from openpilot.system.ui.widgets.icon_widget import IconWidget
 from openpilot.system.ui.widgets.label import UnifiedLabel, gui_label
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, TextAlignment, TextAlignmentVertical
-from openpilot.selfdrive.ui.mici.parking_overlay import parking_detail, parking_title, should_show_parking
+from openpilot.selfdrive.ui.mici.parking_overlay import draw_parking_banner
 from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
 from openpilot.common.version import RELEASE_BRANCHES
 
@@ -162,10 +162,6 @@ class MiciHomeLayout(Widget):
     self._date_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
     self._branch_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, scroll=True)
     self._version_commit_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
-    self._parking_label = UnifiedLabel("", font_size=48, font_weight=FontWeight.BOLD, max_width=470, wrap_text=True,
-                                       alignment=TextAlignment.CENTER)
-    self._parking_detail_label = UnifiedLabel("", font_size=32, text_color=rl.LIGHTGRAY, font_weight=FontWeight.ROMAN,
-                                              max_width=470, wrap_text=True, alignment=TextAlignment.CENTER)
 
   def _update_state(self):
     if self.is_pressed and not self._is_pressed_prev:
@@ -250,13 +246,7 @@ class MiciHomeLayout(Widget):
         self._version_commit_label.set_position(version_pos.x, version_pos.y + self._date_label.font_size + 7)
         self._version_commit_label.render()
 
-    if should_show_parking():
-      self._parking_label.set_text(parking_title())
-      self._parking_label.set_position(self.rect.x + 8, self.rect.y + 205)
-      self._parking_label.render()
-      self._parking_detail_label.set_text(parking_detail())
-      self._parking_detail_label.set_position(self.rect.x + 8, self.rect.y + 275)
-      self._parking_detail_label.render()
+    draw_parking_banner(self.rect.x, self.rect.y + 172)
 
     # ***** Center-aligned bottom section icons *****
     usb_connected = ui_state.usb_connected
