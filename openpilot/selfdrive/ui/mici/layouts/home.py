@@ -5,6 +5,7 @@ import math
 import time
 
 from openpilot.cereal import log
+from openpilot.cereal.visionipc import VisionStreamType
 import pyray as rl
 from collections.abc import Callable
 from openpilot.system.ui.widgets import Widget
@@ -12,6 +13,7 @@ from openpilot.system.ui.widgets.layouts import HBoxLayout
 from openpilot.system.ui.widgets.icon_widget import IconWidget
 from openpilot.system.ui.widgets.label import UnifiedLabel, gui_label
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, TextAlignment, TextAlignmentVertical
+from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
 from openpilot.common.version import RELEASE_BRANCHES
 
@@ -132,6 +134,7 @@ class MiciHomeLayout(Widget):
     self._is_pressed_prev = False
 
     self._version_text = self._get_version_text()
+    self._parking_camera_view: CameraView | None = None
 
     self._experimental_icon = IconWidget("icons_mici/experimental_mode.png", (48, 48))
     self._usb_icon = IconWidget("icons_mici/usb.png", (62, 40))
@@ -221,6 +224,16 @@ class MiciHomeLayout(Widget):
     return version, branch, commit[:7], date_str
 
   def _render(self, _):
+    parking_test_mode = (ui_state.params.get_bool("ParkingTestMode") and
+                         not ui_state.params.get_bool("IsReleaseBranch"))
+    if parking_test_mode:
+      if self._parking_camera_view is None:
+        self._parking_camera_view = CameraView("camerad", VisionStreamType.VISION_STREAM_NARROW_ROAD)
+      self._parking_camera_view.render(self.rect)
+    elif self._parking_camera_view is not None:
+      self._parking_camera_view.close()
+      self._parking_camera_view = None
+
     # TODO: why is there extra space here to get it to be flush?
     text_pos = rl.Vector2(self.rect.x - 2 + HOME_PADDING, self.rect.y - 16)
     self._openpilot_label.set_position(text_pos.x, text_pos.y)
@@ -250,7 +263,8 @@ class MiciHomeLayout(Widget):
         self._version_commit_label.render()
 
     parking = ui_state.sm["parkingState"]
-    show_parking = (ui_state.sm["carState"].standstill and parking.phase not in ("", "disabled", "scanning") and
+    show_parking = ((parking_test_mode or ui_state.sm["carState"].standstill) and
+                    parking.phase not in ("", "disabled", "scanning") and
                     ui_state.sm.seen["parkingState"])
     if show_parking:
       titles = {
