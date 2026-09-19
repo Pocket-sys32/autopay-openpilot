@@ -1,0 +1,14 @@
+[Unit]
+Description=Headless Android emulator for parking demo
+After=network-online.target
+
+[Service]
+User=parking-demo
+Group=kvm
+Environment=ANDROID_HOME=/opt/android-sdk
+ExecStart=/opt/android-sdk/emulator/emulator -avd parking-demo -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -accel on
+Restart=on-failure
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

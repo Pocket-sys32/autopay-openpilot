@@ -161,6 +161,10 @@ class MiciHomeLayout(Widget):
     self._date_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
     self._branch_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, scroll=True)
     self._version_commit_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
+    self._parking_label = UnifiedLabel("", font_size=48, font_weight=FontWeight.BOLD, max_width=470, wrap_text=True,
+                                       alignment=TextAlignment.CENTER)
+    self._parking_detail_label = UnifiedLabel("", font_size=32, text_color=rl.LIGHTGRAY, font_weight=FontWeight.ROMAN,
+                                              max_width=470, wrap_text=True, alignment=TextAlignment.CENTER)
 
   def _update_state(self):
     if self.is_pressed and not self._is_pressed_prev:
@@ -244,6 +248,35 @@ class MiciHomeLayout(Widget):
         self._version_commit_label.set_text(self._version_text[2])
         self._version_commit_label.set_position(version_pos.x, version_pos.y + self._date_label.font_size + 7)
         self._version_commit_label.render()
+
+    parking = ui_state.sm["parkingState"]
+    show_parking = (ui_state.sm["carState"].standstill and parking.phase not in ("", "disabled", "scanning") and
+                    ui_state.sm.seen["parkingState"])
+    if show_parking:
+      titles = {
+        "countdown": "parking demo ready",
+        "sending": "sending parking demo",
+        "processing": "parking demo processing",
+        "completed": "demo completed",
+        "failed": "parking demo failed",
+        "unknown": "result unknown",
+        "action_required": "action required",
+      }
+      self._parking_label.set_text(titles.get(parking.phase, "parking demo"))
+      self._parking_label.set_position(self.rect.x + 8, self.rect.y + 205)
+      self._parking_label.render()
+      detail = f"{parking.plateMasked} · {parking.durationSeconds // 3600} hour(s)"
+      if parking.phase == "countdown" and parking.actionExpiresAtUnixMs:
+        now_ms = int(datetime.datetime.now(datetime.UTC).timestamp() * 1000)
+        remaining = max(0, (parking.actionExpiresAtUnixMs - now_ms + 999) // 1000)
+        detail = f"{detail} · submitting in {remaining}s\nTap parking settings to edit or cancel"
+      elif parking.phase == "completed":
+        detail = "Demo completed — no parking purchased."
+      elif parking.emailStatus not in ("", "none"):
+        detail = f"{detail} · email {parking.emailStatus}"
+      self._parking_detail_label.set_text(detail)
+      self._parking_detail_label.set_position(self.rect.x + 8, self.rect.y + 275)
+      self._parking_detail_label.render()
 
     # ***** Center-aligned bottom section icons *****
     usb_connected = ui_state.usb_connected

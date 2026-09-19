@@ -10,7 +10,33 @@ $Cxx.namespace("cereal");
 # DO rename the structs
 # DON'T change the identifier (e.g. @0x81c2f05a394cf4af)
 
-struct CustomReserved0 @0x81c2f05a394cf4af {
+struct ParkingState @0x81c2f05a394cf4af {
+  schemaVersion @0 :UInt16;
+  episodeId @1 :Text;
+  attemptId @2 :Text;
+  phase @3 :Text;
+  reasonCode @4 :Text;
+  environment @5 :Text;
+  providerDisplayName @6 :Text;
+  zoneDisplay @7 :Text;
+  plateMasked @8 :Text;
+  durationSeconds @9 :UInt32;
+  amountMinor @10 :Int32;
+  currency @11 :Text;
+  paymentStatus @12 :Text;
+  parkingStatus @13 :Text;
+  startsAtUnixMs @14 :Int64;
+  expiresAtUnixMs @15 :Int64;
+  requiresUserAction @16 :Bool;
+  actionExpiresAtUnixMs @17 :Int64;
+  lastTransitionMonoTime @18 :UInt64;
+  lastBackendSyncUnixMs @19 :Int64;
+  candidatePresent @20 :Bool;
+  candidateAmbiguous @21 :Bool;
+  locationAccuracyM @22 :Float32;
+  reasoningStatus @23 :Text;
+  reasoningSummaryRedacted @24 :Text;
+  emailStatus @25 :Text;
 }
 
 struct CustomReserved1 @0xaedffd8f31e7b55d {

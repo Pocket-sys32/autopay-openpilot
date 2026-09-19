@@ -1,0 +1,18 @@
+[Unit]
+Description=Comma parking demo API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=parking-demo
+Group=parking-demo
+WorkingDirectory=/opt/parking-demo
+EnvironmentFile=/etc/parking-demo/backend.env
+ExecStart=/opt/parking-demo/.venv/bin/python -m parking_backend.secret_exec /opt/parking-demo/.venv/bin/uvicorn parking_backend.api:app --host 127.0.0.1 --port 8080 --proxy-headers
+Restart=on-failure
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/parking-demo
+
+[Install]
+WantedBy=multi-user.target

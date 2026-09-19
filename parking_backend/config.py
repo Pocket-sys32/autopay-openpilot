@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import os
+from pathlib import Path
+
+
+def _required(name: str) -> str:
+  value = os.getenv(name, "").strip()
+  if not value:
+    raise RuntimeError(f"{name} is required")
+  return value
+
+
+@dataclass(frozen=True, slots=True)
+class Settings:
+  database_path: Path
+  bearer_token: str
+  device_id: str
+  appium_url: str
+  gmail_sender: str
+  gmail_recipient: str
+  gmail_client_id: str
+  gmail_client_secret: str
+  gmail_refresh_token: str
+  test_card_number: str
+  test_card_cvv: str
+  test_card_expiration: str
+  test_zip_code: str
+
+  @classmethod
+  def from_environment(cls) -> Settings:
+    return cls(
+      database_path=Path(os.getenv("PARKING_DATABASE_PATH", "/var/lib/parking-demo/parking.db")),
+      bearer_token=_required("PARKING_BEARER_TOKEN"),
+      device_id=os.getenv("PARKING_DEVICE_ID", "comma-four-demo"),
+      appium_url=os.getenv("PARKING_APPIUM_URL", "http://127.0.0.1:4723"),
+      gmail_sender=os.getenv("PARKING_GMAIL_SENDER", "pocketsfast@gmail.com"),
+      gmail_recipient=os.getenv("PARKING_GMAIL_RECIPIENT", "pocketsfast@gmail.com"),
+      gmail_client_id=os.getenv("PARKING_GMAIL_CLIENT_ID", ""),
+      gmail_client_secret=os.getenv("PARKING_GMAIL_CLIENT_SECRET", ""),
+      gmail_refresh_token=os.getenv("PARKING_GMAIL_REFRESH_TOKEN", ""),
+      test_card_number=os.getenv("PARKING_TEST_CARD_NUMBER", "4242424242424242"),
+      test_card_cvv=os.getenv("PARKING_TEST_CARD_CVV", "123"),
+      test_card_expiration=os.getenv("PARKING_TEST_CARD_EXPIRATION", "12/30"),
+      test_zip_code=os.getenv("PARKING_TEST_ZIP_CODE", "95616"),
+    )
+
