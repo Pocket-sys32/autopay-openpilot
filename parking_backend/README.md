@@ -47,15 +47,25 @@ The VM has no display, and the page is loaded by Chrome *inside* the emulator, s
 on the emulator itself. Drive it by hand once; never let Appium perform the sign-in, because Google refuses a
 WebDriver-controlled session with "this browser or app may not be secure".
 
+Both scripts run on your workstation, not on the VM:
+
 ```bash
-systemctl stop parking-worker            # on the VM, so no attempt runs during the session
-./deploy/remote_emulator.sh              # on your workstation; needs gcloud, adb and scrcpy
+./deploy/workstation_setup.sh       # once: Google Cloud CLI and scrcpy, installed under $HOME, no root
+gcloud auth login                   # only if gcloud is not signed in yet
+./deploy/remote_emulator.sh --status   # services, emulator, and how many Google accounts are on the device
+./deploy/remote_emulator.sh            # mirror the emulator
 ```
 
-The script tunnels the emulator's loopback adb port over SSH and mirrors the screen. In the mirrored device:
-Settings -> Passwords & accounts -> Add account -> Google, then open Chrome and pick the same account. The AVD
-uses the `google_apis_playstore` image, so this is the real Play Services sign-in flow and 2FA prompts work
-normally. Start `parking-worker` again when you are done.
+`remote_emulator.sh` stops `parking-worker` so no attempt runs mid-session, tunnels the emulator's loopback adb
+port over SSH, mirrors the screen with scrcpy, and on exit disconnects, reports the account count and restarts
+the worker if it had been running. In the mirrored device: Settings -> Passwords & accounts -> Add account ->
+Google, then open Chrome and pick the same account. The AVD uses the `google_apis_playstore` image, so this is
+the real Play Services sign-in and 2FA prompts work normally.
+
+The scripts default to `parking-demo-vm` in `fieldscout-497018`/`us-west1-b`; override with `PARKING_VM_INSTANCE`,
+`PARKING_VM_PROJECT` and `PARKING_VM_ZONE`. The emulator is on `parking-demo-vm`, not on `instance1`, which is an
+`e2-medium` and never passed the VM gate above. scrcpy must be 2.x or newer: the emulator runs Android 15, which
+the version most distributions package does not support.
 
 The login persists: `-no-snapshot` only disables Quick Boot, so `userdata-qemu.img` keeps the account and the
 Chrome profile across restarts, and both adapters set `appium:noReset` so a session never clears them. Passing
