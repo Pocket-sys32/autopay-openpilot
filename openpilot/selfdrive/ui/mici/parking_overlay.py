@@ -6,6 +6,7 @@ import os
 import pyray as rl
 
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.selfdrive.ui.mici.geometric import draw_prism_field
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.theme import ACCENT_BRIGHT, BORDER, DANGER, SURFACE, TEXT, WARNING, rgba
@@ -96,6 +97,8 @@ def draw_parking_status(content_rect: rl.Rectangle) -> None:
   capsule = rl.Rectangle(capsule_x, capsule_y, capsule_width, capsule_height)
 
   rl.draw_rectangle_rounded(capsule, 0.48, 16, rgba(SURFACE, round(232 * alpha)))
+  draw_prism_field(rl.Rectangle(capsule.x + 5, capsule.y + 5, capsule.width - 10, capsule.height - 10),
+                   elapsed, cell=30, alpha=round(38 * alpha), drift=7.0)
   rl.draw_rectangle_rounded_lines_ex(capsule, 0.48, 16, 1.0, rgba(BORDER, round(92 * alpha)))
 
   icon_center = rl.Vector2(capsule.x + 24, capsule.y + capsule.height / 2)

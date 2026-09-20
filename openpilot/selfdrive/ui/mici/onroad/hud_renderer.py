@@ -9,6 +9,7 @@ from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.theme import (ACCENT, ACCENT_BRIGHT, ACCENT_SOFT, BORDER, SURFACE_RAISED,
                                            TEXT, TEXT_MUTED, rgba)
+from openpilot.selfdrive.ui.mici.geometric import draw_prism_field
 from openpilot.system.ui.widgets import Widget
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.cereal import log
@@ -307,15 +308,19 @@ class HudRenderer(Widget):
     """Draw a fixed-footprint VISION-inspired speed instrument."""
     card = rl.Rectangle(rect.x + 10, rect.y + rect.height - 84, 92, 72)
     rl.draw_rectangle_rounded(card, 0.22, 8, rgba(SURFACE_RAISED, 226))
+    draw_prism_field(rl.Rectangle(card.x + 2, card.y + 2, card.width - 4, card.height - 4),
+                     rl.get_time(), cell=25, alpha=62, drift=2.8)
     rl.draw_rectangle_rounded_lines_ex(card, 0.22, 8, 1.0, rgba(BORDER, 86))
 
     # The same green family used by home and parking status replaces the unrelated pearlescent rainbow.
     accent_y = int(card.y + 8)
     accent_x = int(card.x + 10)
-    rl.draw_rectangle_gradient_h(accent_x, accent_y, 36, 2,
-                                 rgba(ACCENT, 220), rgba(ACCENT_BRIGHT, 220))
-    rl.draw_rectangle_gradient_h(accent_x + 36, accent_y, 36, 2,
-                                 rgba(ACCENT_BRIGHT, 220), rgba(ACCENT_SOFT, 190))
+    rl.draw_triangle(rl.Vector2(accent_x, accent_y), rl.Vector2(accent_x + 27, accent_y),
+                     rl.Vector2(accent_x + 19, accent_y + 6), rgba(ACCENT, 235))
+    rl.draw_triangle(rl.Vector2(accent_x + 23, accent_y), rl.Vector2(accent_x + 54, accent_y),
+                     rl.Vector2(accent_x + 43, accent_y + 6), rgba(ACCENT_BRIGHT, 235))
+    rl.draw_triangle(rl.Vector2(accent_x + 50, accent_y), rl.Vector2(accent_x + 72, accent_y),
+                     rl.Vector2(accent_x + 67, accent_y + 6), rgba(ACCENT_SOFT, 210))
 
     speed_text = str(round(self.speed))
     speed_size = FONT_SIZES.current_speed

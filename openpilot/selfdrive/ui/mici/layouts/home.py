@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import datetime
 import math
-import random
 import time
 
 from openpilot.cereal import log
@@ -14,6 +13,7 @@ from openpilot.system.ui.widgets.icon_widget import IconWidget
 from openpilot.system.ui.widgets.label import UnifiedLabel, gui_label
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, TextAlignment, TextAlignmentVertical
 from openpilot.system.ui.lib.theme import ACCENT, TEXT, TEXT_DIM, TEXT_MUTED, rgba
+from openpilot.selfdrive.ui.mici.geometric import draw_prism_field
 from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
 
 HOME_PADDING = 8
@@ -157,17 +157,6 @@ class MiciHomeLayout(Widget):
     self._pay_label = UnifiedLabel("Pay", font_size=88, text_color=rgba(ACCENT),
                                    font_weight=FontWeight.DISPLAY, max_width=480, wrap_text=False)
     self._pilot_label = UnifiedLabel("Pilot", font_size=88, font_weight=FontWeight.DISPLAY, max_width=480, wrap_text=False)
-    # Pick scattered positions once. Favor open space, including across the
-    # vertical wrap boundary, so the moving symbols do not form rows or clumps.
-    rng = random.Random(42)
-    self._dollar_positions: list[tuple[float, float]] = []
-    for _ in range(12):
-      candidates = [(rng.random(), rng.random()) for _ in range(40)]
-      position = max(candidates, key=lambda point: min(
-        ((point[0] - x) * 1.8) ** 2 + min(abs(point[1] - y), 1 - abs(point[1] - y)) ** 2
-        for x, y in self._dollar_positions
-      )) if self._dollar_positions else candidates[0]
-      self._dollar_positions.append(position)
     self._version_label = UnifiedLabel("", font_size=28, text_color=rgba(TEXT_MUTED),
                                        font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
     self._large_version_label = UnifiedLabel("", font_size=64, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
@@ -226,25 +215,13 @@ class MiciHomeLayout(Widget):
 
     return version, date_str
 
-  def _draw_dollar_background(self):
-    """Float a fixed set of soft green symbols behind the home-page content."""
-    font = gui_app.font(FontWeight.DISPLAY)
-    elapsed = rl.get_time()
-    travel = max(1.0, self.rect.height - 56)
-    for index, (anchor_x, anchor_y) in enumerate(self._dollar_positions):
-      size = 24 + (index * 7 % 13)
-      progress = (anchor_y + elapsed * 6 / travel) % 1.0
-      y = (1.0 - progress) * max(1.0, travel - size)
-      x = 10 + anchor_x * max(1.0, self.rect.width - size - 20)
-      x += math.sin(elapsed * 0.35 + index * 2.4) * 5
-      # Fade in over the first 48 px after a symbol wraps onto the bottom edge.
-      edge_fade = min(1.0, progress * travel / 48, (1.0 - progress) * travel / 48)
-      opacity = round(88 * edge_fade)
-      rl.draw_text_ex(font, "$", rl.Vector2(self.rect.x + x, self.rect.y + y),
-                      size, 0, rgba(ACCENT, opacity))
+  def _draw_geometric_background(self):
+    """A living transaction-map surface rather than generic floating currency symbols."""
+    field = rl.Rectangle(self.rect.x, self.rect.y, self.rect.width, max(1.0, self.rect.height - 50))
+    draw_prism_field(field, rl.get_time(), cell=54, alpha=42, drift=4.0)
 
   def _render(self, _):
-    self._draw_dollar_background()
+    self._draw_geometric_background()
     intro_elapsed = rl.get_time() - self._intro_started
 
     def reveal(delay: float) -> float:
