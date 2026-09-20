@@ -77,7 +77,7 @@ class ParkingLayoutMici(NavScroller):
       toggle_callback=self._on_g82_mode_toggled,
       description="Use the comma GPS and road camera for parking detection without vehicle control.",
     )
-    self._g82_mode_toggle.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
+    self._g82_mode_toggle.set_enabled(self._settings_enabled)
 
     self._auto_pay_toggle = BigParamControl(
       "automatic parking payment",
@@ -85,7 +85,7 @@ class ParkingLayoutMici(NavScroller):
       toggle_callback=self._on_auto_pay_toggled,
       description="Pay automatically after a supported parking sign is detected and the car is parked.",
     )
-    self._auto_pay_toggle.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
+    self._auto_pay_toggle.set_enabled(self._settings_enabled)
 
     self._vehicle_button = BigButton(
       "vehicle",
@@ -93,7 +93,7 @@ class ParkingLayoutMici(NavScroller):
       description="Your license plate and registration region.",
     )
     self._vehicle_button.set_click_callback(self._edit_plate)
-    self._vehicle_button.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
+    self._vehicle_button.set_enabled(self._settings_enabled)
 
     self._payment_profile_button = BigButton(
       "payment profile",
@@ -101,7 +101,7 @@ class ParkingLayoutMici(NavScroller):
       description="The name used for parking payments and receipts.",
     )
     self._payment_profile_button.set_click_callback(self._edit_payment_profile)
-    self._payment_profile_button.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
+    self._payment_profile_button.set_enabled(self._settings_enabled)
 
     self._duration = BigMultiToggle(
       "default duration",
@@ -109,7 +109,7 @@ class ParkingLayoutMici(NavScroller):
       select_callback=self._set_duration,
       description="How long each new parking session should last.",
     )
-    self._duration.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active() or
+    self._duration.set_enabled(lambda: self._settings_enabled() or
                                bool(ui_state.sm["carState"].standstill))
 
     self._status = GreyBigButton(
@@ -129,6 +129,11 @@ class ParkingLayoutMici(NavScroller):
 
     ui_state.add_offroad_transition_callback(self._refresh)
     self._refresh()
+
+  @staticmethod
+  def _settings_enabled() -> bool:
+    return (ui_state.is_offroad() or parking_test_mode_active() or
+            (ui_state.parking_g82_active and ui_state.params.get_bool("IsOffroad")))
 
   def show_event(self):
     super().show_event()
@@ -156,6 +161,8 @@ class ParkingLayoutMici(NavScroller):
         "STALE_VEHICLE_EVIDENCE": "Waiting for an accurate GPS fix",
         "CANDIDATE_MISSING": "Scanning for a parking QR",
       }.get(parking.reasonCode, status_text)
+      if ui_state.gps_speed_mps is None and parking.phase in ("scanning", "detected"):
+        status_text = "Waiting for an accurate GPS fix"
     if status_text:
       self._status.set_value(status_text)
 

@@ -1,3 +1,4 @@
+import math
 import numpy as np
 import time
 import threading
@@ -134,6 +135,19 @@ class UIState:
   def is_offroad(self) -> bool:
     return not self.started
 
+  @property
+  def parking_g82_active(self) -> bool:
+    return self.params.get_bool("ParkingG82ModeEnabled") and self.params.get_bool("ParkingAutoPayEnabled")
+
+  @property
+  def gps_speed_mps(self) -> float | None:
+    for service in ("gpsLocationExternal", "gpsLocation"):
+      gps = self.sm[service]
+      if (self.sm.seen[service] and self.sm.alive[service] and self.sm.valid[service] and gps.hasFix and
+          math.isfinite(gps.speed) and gps.speed >= 0 and 0 <= gps.speedAccuracy <= 1.0):
+        return float(gps.speed)
+    return None
+
   def update(self) -> None:
     self.prime_state.start()  # start thread after manager forks ui
     if self._params_thread is None:
@@ -173,9 +187,10 @@ class UIState:
     elif not self.sm.alive["wideRoadCameraState"] or not self.sm.valid["wideRoadCameraState"]:
       self.light_sensor = -1
 
-    # Update started state. Parking test mode emulates the on-road HUD off-car
-    # without starting selfdrived or card.
+    # Parking modes show the camera HUD independently of vehicle ignition.
+    # This is UI state only; manager still controls the real onroad processes.
     self.started = ((self.sm["deviceState"].started and self.ignition) or
+                    self.parking_g82_active or
                     (self.params.get_bool("ParkingTestMode") and not self.is_release and self.params.get_bool("IsOffroad")))
 
     # Update body state

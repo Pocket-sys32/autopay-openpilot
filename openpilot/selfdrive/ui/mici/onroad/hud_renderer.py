@@ -106,6 +106,7 @@ class HudRenderer(Widget):
     self.set_speed: float = SET_SPEED_NA
     self._set_speed_changed_time: float = 0
     self.speed: float = 0.0
+    self.speed_valid: bool = True
     self.v_ego_cluster_seen: bool = False
     self._engaged: bool = False
     self._chestnut_fade_time: float = 0
@@ -149,14 +150,18 @@ class HudRenderer(Widget):
   def _update_state(self) -> None:
     """Update HUD state based on car state and controls state."""
     sm = ui_state.sm
-    gps_speed = None
-    if ui_state.params.get_bool("ParkingG82ModeEnabled"):
-      for service in ("gpsLocationExternal", "gpsLocation"):
-        if (sm.seen[service] and sm.alive[service] and sm.valid[service] and sm[service].hasFix and
-            0 <= sm[service].speedAccuracy <= 1.0):
-          gps_speed = float(sm[service].speed)
-          break
-    if sm.recv_frame["carState"] < ui_state.started_frame and gps_speed is None:
+    self.speed_valid = True
+    if ui_state.parking_g82_active:
+      gps_speed = ui_state.gps_speed_mps
+      self.speed_valid = gps_speed is not None
+      self.speed = (gps_speed or 0.0) * (CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH)
+      self.is_cruise_set = False
+      self.is_cruise_available = False
+      self.set_speed = SET_SPEED_NA
+      self._engaged = False
+      return
+
+    if sm.recv_frame["carState"] < ui_state.started_frame:
       self.is_cruise_set = False
       self.set_speed = SET_SPEED_NA
       self.speed = 0.0
@@ -181,7 +186,7 @@ class HudRenderer(Widget):
 
     v_ego_cluster = car_state.vEgoCluster
     self.v_ego_cluster_seen = self.v_ego_cluster_seen or v_ego_cluster != 0.0
-    v_ego = gps_speed if gps_speed is not None else (v_ego_cluster if self.v_ego_cluster_seen else car_state.vEgo)
+    v_ego = v_ego_cluster if self.v_ego_cluster_seen else car_state.vEgo
     speed_conversion = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
     self.speed = max(0.0, v_ego * speed_conversion)
 
@@ -189,6 +194,8 @@ class HudRenderer(Widget):
     """Render HUD elements to the screen."""
 
     self._draw_current_speed(rect)
+    if ui_state.parking_g82_active:
+      return
     self._torque_bar.render(rect)
 
     if self.is_cruise_set:
@@ -320,7 +327,7 @@ class HudRenderer(Widget):
     for start, end in ((left, right), (right, bottom), (bottom, left)):
       rl.draw_line_ex(start, end, 2.0, rgba(ACCENT_SOFT, 220))
 
-    speed_text = str(round(self.speed))
+    speed_text = str(round(self.speed)) if self.speed_valid else "–"
     speed_size = FONT_SIZES.current_speed
     speed_text_size = measure_text_cached(self._font_display, speed_text, speed_size)
     if speed_text_size.x > frame.width - 26:
@@ -335,6 +342,8 @@ class HudRenderer(Widget):
     rl.draw_text_ex(self._font_display, speed_text, speed_pos, speed_size, 0, rgba(TEXT, 250))
 
     unit_text = (tr("km/h") if ui_state.is_metric else tr("mph")).upper()
+    if ui_state.parking_g82_active:
+      unit_text = f"GPS {unit_text}"
     unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
     unit_pos = rl.Vector2(frame.x + (frame.width - unit_text_size.x) / 2, frame.y + 57)
     rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, rgba(TEXT_MUTED, 205))

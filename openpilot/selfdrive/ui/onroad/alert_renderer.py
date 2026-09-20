@@ -83,6 +83,8 @@ class AlertRenderer(Widget):
 
   def get_alert(self, sm: messaging.SubMaster) -> Alert | None:
     """Generate the current alert based on selfdrive state."""
+    if ui_state.parking_g82_active and not sm['deviceState'].started:
+      return None
     ss = sm['selfdriveState']
 
     # Check if selfdriveState messages have stopped arriving

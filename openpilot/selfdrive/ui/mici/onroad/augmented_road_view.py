@@ -198,7 +198,7 @@ class AugmentedRoadView(CameraView):
     self._content_rect = rl.Rectangle(
       self.rect.x,
       self.rect.y,
-      self.rect.width - SIDE_PANEL_WIDTH,
+      self.rect.width if ui_state.parking_g82_active else self.rect.width - SIDE_PANEL_WIDTH,
       self.rect.height,
     )
 
@@ -215,7 +215,8 @@ class AugmentedRoadView(CameraView):
     super()._render(self._content_rect)
 
     # Draw all UI overlays
-    self._model_renderer.render(self._content_rect)
+    if not ui_state.parking_g82_active:
+      self._model_renderer.render(self._content_rect)
 
     # Fade out bottom of overlays for looks
     rl.draw_texture_ex(self._fade_texture, rl.Vector2(self._content_rect.x, self._content_rect.y), 0.0, 1.0, rl.WHITE)
@@ -223,7 +224,7 @@ class AugmentedRoadView(CameraView):
     alert_to_render, not_animating_out = self._alert_renderer.will_render()
 
     # Hide DMoji when disengaged unless AlwaysOnDM is enabled
-    should_draw_dmoji = (not self._hud_renderer.drawing_top_icons() and
+    should_draw_dmoji = (not ui_state.parking_g82_active and not self._hud_renderer.drawing_top_icons() and
                          (ui_state.status != UIStatus.DISENGAGED or ui_state.always_on_dm))
     self._driver_state_renderer.set_should_draw(should_draw_dmoji)
     self._driver_state_renderer.set_position(self._rect.x + 16, self._rect.y + 10)
@@ -248,12 +249,13 @@ class AugmentedRoadView(CameraView):
 
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds
-    self._confidence_ball.render(self.rect)
+    if not ui_state.parking_g82_active:
+      self._confidence_ball.render(self.rect)
 
     self._bookmark_icon.render(self.rect)
 
   def _switch_stream_if_needed(self, sm):
-    if sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
+    if not ui_state.parking_g82_active and sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
       v_ego = sm['carState'].vEgo
       if v_ego < WIDE_CAM_MAX_SPEED:
         target = WIDE_CAM

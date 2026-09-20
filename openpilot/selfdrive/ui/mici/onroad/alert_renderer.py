@@ -119,6 +119,9 @@ class AlertRenderer(Widget):
 
   def get_alert(self, sm: messaging.SubMaster) -> Alert | None:
     """Generate the current alert based on selfdrive state."""
+    if ui_state.parking_g82_active and not sm['deviceState'].started:
+      # selfdrived is intentionally absent during the GPS/camera parking demo.
+      return None
     ss = sm['selfdriveState']
     parking_test_mode = ui_state.params.get_bool("ParkingTestMode") and not ui_state.is_release
 

@@ -125,10 +125,17 @@ class MiciMainLayout(Scroller):
       self._onroad_time_delay = None
 
     # When car leaves standstill, pop nav stack and scroll to onroad
-    CS = ui_state.sm["carState"]
-    if not CS.standstill and self._prev_standstill:
+    standstill = self._at_standstill()
+    if not standstill and self._prev_standstill:
       gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
-    self._prev_standstill = CS.standstill
+    self._prev_standstill = standstill
+
+  @staticmethod
+  def _at_standstill() -> bool:
+    if ui_state.parking_g82_active:
+      speed = ui_state.gps_speed_mps
+      return speed is None or speed < 0.5 * 0.44704
+    return bool(ui_state.sm["carState"].standstill)
 
   def _on_interactive_timeout(self):
     # Don't pop if onboarding
@@ -137,7 +144,7 @@ class MiciMainLayout(Scroller):
 
     if ui_state.started:
       # Don't pop if at standstill
-      if not ui_state.sm["carState"].standstill:
+      if not self._at_standstill():
         gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
     else:
       # Screen turns off on timeout offroad, so pop immediately without animation

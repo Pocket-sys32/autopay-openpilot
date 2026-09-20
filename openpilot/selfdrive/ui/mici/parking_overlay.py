@@ -26,24 +26,31 @@ def parking_test_mode_active() -> bool:
 
 
 def _current_event() -> str:
-  if not ui_state.sm.seen["parkingState"]:
-    return ""
   parking = ui_state.sm["parkingState"]
-  if parking.phase == "completed":
+  seen = ui_state.sm.seen["parkingState"]
+  if seen and parking.phase == "completed":
     return "paid" if parking.providerDisplayName == "LAZ Parking" else "confirmed"
-  if parking.phase == "confirm":
+  if seen and parking.phase == "confirm":
     return "confirm"
-  if parking.phase == "committing":
+  if seen and parking.phase == "committing":
     return "paying"
-  if parking.phase == "failed":
+  if seen and parking.phase == "failed":
     return {"PAYMENT_DECLINED": "declined", "RESERVATION_REJECTED": "rejected"}.get(parking.reasonCode, "failed")
-  if parking.candidatePresent and parking.phase in PARKING_PHASES:
+  if seen and parking.candidatePresent and parking.phase in PARKING_PHASES:
     return "found"
+  if ui_state.parking_g82_active:
+    speed = ui_state.gps_speed_mps
+    if speed is None:
+      return "gps_wait"
+    return "scanning" if speed < 5 * 0.44704 else "approaching"
   return ""
 
 
 def _event_style(event: str) -> tuple[str, str, rl.Color]:
   return {
+    "gps_wait": ("Waiting for GPS", "P", rgba(WARNING)),
+    "scanning": ("Scanning for parking", "P", ACCENT_GREEN),
+    "approaching": ("Scan below 5 mph", "P", ACCENT_GREEN),
     "found": ("Parking found", "P", ACCENT_GREEN),
     "confirm": ("Confirm to pay", "!", rgba(WARNING)),
     "paying": ("Paying…", "P", ACCENT_GREEN),
@@ -73,11 +80,12 @@ def draw_parking_status(content_rect: rl.Rectangle) -> None:
 
   elapsed = max(0.0, rl.get_time() - _event_started)
   preview = os.getenv("PARKING_UI_PREVIEW") == "1"
-  if not preview and elapsed >= STATUS_DURATION_SECONDS:
+  persistent = preview or event in ("gps_wait", "scanning", "approaching")
+  if not persistent and elapsed >= STATUS_DURATION_SECONDS:
     return
 
   entrance = _ease_out_cubic(elapsed / 0.42)
-  exit_alpha = 1.0 if preview else min(1.0, (STATUS_DURATION_SECONDS - elapsed) / 0.45)
+  exit_alpha = 1.0 if persistent else min(1.0, (STATUS_DURATION_SECONDS - elapsed) / 0.45)
   alpha = max(0.0, min(1.0, entrance * exit_alpha))
   if alpha <= 0.01:
     return
