@@ -1,8 +1,7 @@
-from io import BytesIO
 import unittest
 
+import cv2
 import numpy as np
-from PIL import Image
 
 from openpilot.common.qrcode import _Qr
 from parking_backend.qr_decode import InvalidSnapshot, decode_jpeg
@@ -12,9 +11,10 @@ def qr_jpeg(payload: str, version: int = 1) -> bytes:
   code = _Qr(version, payload.encode())
   modules = np.pad(np.asarray(code.modules), 4)
   gray = np.repeat(np.repeat((~modules).astype(np.uint8) * 255, 12, axis=0), 12, axis=1)
-  output = BytesIO()
-  Image.fromarray(gray, mode="L").save(output, format="JPEG", quality=80)
-  return output.getvalue()
+  ok, output = cv2.imencode(".jpg", gray, (cv2.IMWRITE_JPEG_QUALITY, 80))
+  if not ok:
+    raise AssertionError("OpenCV could not build the QR test fixture")
+  return output.tobytes()
 
 
 class TestQrDecode(unittest.TestCase):
@@ -34,9 +34,9 @@ class TestQrDecode(unittest.TestCase):
         if inverted:
           symbols[1] = 255 - symbols[1]
         frame = np.concatenate(symbols, axis=1)
-        output = BytesIO()
-        Image.fromarray(frame).save(output, format="JPEG", quality=90)
-        self.assertEqual(decode_jpeg(output.getvalue())[0], ["bay-one", "bay-two"])
+        ok, output = cv2.imencode(".jpg", frame, (cv2.IMWRITE_JPEG_QUALITY, 90))
+        self.assertTrue(ok)
+        self.assertEqual(decode_jpeg(output.tobytes())[0], ["bay-one", "bay-two"])
 
   def test_rejects_non_image(self):
     with self.assertRaises(InvalidSnapshot):

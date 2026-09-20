@@ -141,6 +141,17 @@ class DecliningAdapter(FakeAdapter):
 
 
 class TestLazWorker(TestWorker):
+  def test_laz_submits_immediately_without_a_confirmation_session(self):
+    self.store.put_attempt("comma", laz_request(), now_ms=time.time_ns() // 1_000_000)
+    adapter = FakeAdapter()
+    worker = Worker(self.settings, self.store, {"laz_ttp": adapter}, FakeEmail())
+    worker.process_once()
+    result = self.store.get_attempt("comma", "attempt-1")
+    assert result is not None
+    self.assertEqual((result["state"], result["reason_code"]), ("succeeded", "PARKING_PAID"))
+    self.assertEqual(adapter.calls, 1)
+    self.assertIsNone(worker.held)
+
   def test_declined_card_is_a_definitive_failure_without_retry(self):
     self.store.put_attempt("comma", laz_request(), now_ms=time.time_ns() // 1_000_000)
     adapter = DecliningAdapter()
