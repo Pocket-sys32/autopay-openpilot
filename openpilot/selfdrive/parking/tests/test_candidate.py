@@ -1,7 +1,7 @@
 import unittest
 
 from openpilot.selfdrive.parking.candidate import (CONTROLLED_DEMO_CODE, CONTROLLED_FORM_CANONICAL_URL, CONTROLLED_FORM_ID,
-                                                   CONTROLLED_FORM_URL, LAZ_ENTRY_URL, LAZ_LOCATION_ID, LAZ_PROVIDER_ID,
+                                                   CONTROLLED_FORM_URL, LAZ_LOCATION_ID, LAZ_PROVIDER_ID, LAZ_URLS,
                                                    CandidateRejected, parse_candidate)
 from openpilot.selfdrive.parking.models import normalize_plate
 
@@ -36,24 +36,26 @@ class TestCandidate(unittest.TestCase):
         parse_candidate(payload, observed_mono_ns=1)
 
   def test_accepts_the_allowlisted_paid_location(self):
-    candidate = parse_candidate(LAZ_ENTRY_URL, observed_mono_ns=200)
-    self.assertEqual(candidate.provider_id, LAZ_PROVIDER_ID)
-    self.assertEqual(candidate.location_hint, LAZ_LOCATION_ID)
-    self.assertEqual(candidate.location_hint_type, "location_id")
-    self.assertEqual(len(candidate.payload_sha256), 64)
+    for url in LAZ_URLS:
+      candidate = parse_candidate(url, observed_mono_ns=200)
+      self.assertEqual(candidate.provider_id, LAZ_PROVIDER_ID)
+      self.assertEqual(candidate.location_hint, LAZ_LOCATION_ID)
+      self.assertEqual(candidate.location_hint_type, "laz_location")
+      self.assertEqual(len(candidate.payload_sha256), 64)
     # The two locations must stay distinguishable: a demo QR may never become a paid attempt.
     self.assertEqual(parse_candidate(CONTROLLED_FORM_URL, observed_mono_ns=201).provider_id, "demo_google_form")
 
   def test_rejects_other_lots_and_paid_lookalikes(self):
+    entry = LAZ_URLS[0]
     rejected = (
-      LAZ_ENTRY_URL.replace("143245", "143246"),          # a different lot
-      LAZ_ENTRY_URL.replace("https", "http"),
-      LAZ_ENTRY_URL.replace("clip.lazparking.com", "clip.lazparking.com.attacker.example"),
-      f"{LAZ_ENTRY_URL}/",
-      f"{LAZ_ENTRY_URL}?amount=9999",
-      f" {LAZ_ENTRY_URL}",
-      LAZ_ENTRY_URL.upper(),
-      "https://go.lazparking.com/buynow?l=143245",        # the checkout, not the advertised entry point
+      entry.replace(LAZ_LOCATION_ID, "143246"),           # a different lot
+      entry.replace("https", "http"),
+      entry.replace("clip.lazparking.com", "clip.lazparking.com.attacker.example"),
+      f"{entry}/",
+      f"{entry}?amount=9999",
+      f" {entry}",
+      entry.upper(),
+      f"https://go.lazparking.com/buynow?l={LAZ_LOCATION_ID}",  # the checkout, not the advertised entry point
     )
     for payload in rejected:
       with self.subTest(payload=payload), self.assertRaises(CandidateRejected):

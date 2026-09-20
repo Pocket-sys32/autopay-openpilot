@@ -19,8 +19,8 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import Ratekeeper
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.parking.backend_client import BackendAttemptResponse, BackendClientError, ParkingBackendClient
-from openpilot.selfdrive.parking.candidate import (CandidateRejected, LAZ_DURATION_SECONDS, LAZ_PROVIDER_ID,
-                                                   parse_candidate)
+from openpilot.selfdrive.parking.candidate import (CandidateRejected, CONTROLLED_FORM_ID, LAZ_DURATION_SECONDS,
+                                                   LAZ_PROVIDER_ID, parse_candidate)
 from openpilot.selfdrive.parking.evidence import IgnitionEdgeTracker, VehicleEvidence
 from openpilot.selfdrive.parking.intent import IntentConfig, IntentProfile, IntentState, evaluate_intent
 from openpilot.selfdrive.parking.journal import ParkingJournal
@@ -263,25 +263,19 @@ class ParkingDaemon:
   def _candidate_valid(self, now_ns: int) -> bool:
     return self.candidate is not None and not self.candidate_ambiguous and 0 <= now_ns - self.candidate.observed_mono_ns <= CANDIDATE_TTL_NS
 
+  def _is_laz(self) -> bool:
+    if self.candidate is not None:
+      return self.candidate.provider_id == LAZ_PROVIDER_ID
+    return self._request is not None and self._request.quote.provider_id == LAZ_PROVIDER_ID
+
+  def _location_id(self) -> str:
+    return self.candidate.location_hint if self._is_laz() and self.candidate is not None else CONTROLLED_FORM_ID
+
   def _duration(self) -> int:
-    # A paid location sells one stay length; ParkingDefaultDuration only chooses between the demo form's two.
-    if self.candidate is not None and self.candidate.provider_id == LAZ_PROVIDER_ID:
-      return LAZ_DURATION_SECONDS
+    if self._is_laz():
+      return LAZ_DURATION_SECONDS  # LAZ's shortest stay at this site
     duration = self.params.get("ParkingDefaultDuration", return_default=True)
     return duration if isinstance(duration, int) and duration in SUPPORTED_DURATIONS else 3600
-
-  def _payer(self) -> tuple[str, str] | None:
-    """First and last name for a provider that bills a person, or None when they are unusable.
-
-    The backend re-validates both and rejects the attempt if they do not match, so this is a local
-    pre-check that keeps a doomed attempt from being dispatched at all.
-    """
-    first = (self.params.get("ParkingPayerFirstName") or "").strip()
-    last = (self.params.get("ParkingPayerLastName") or "").strip()
-    for value in (first, last):
-      if not 1 <= len(value) <= 40 or not all(c.isascii() and (c.isalpha() or c in " -'") for c in value):
-        return None
-    return first, last
 
   def _publish(self, state: ParkingDisplayState) -> None:
     self.pm.send("parkingState", build_message(state))
@@ -294,8 +288,8 @@ class ParkingDaemon:
 
   def _make_request(self, plate: str, duration: int, now_ns: int, now_ms: int) -> AttemptRequest:
     assert self.candidate is not None
-    quote = Quote(f"{self.candidate.provider_id}-{duration}", self.candidate.provider_id, self.candidate.location_hint,
-                  plate, BillingMode.FIXED_DURATION, duration, 0, 0, "USD", now_ms + 30_000, now_ms + 30_000,
+    quote = Quote(f"demo-{duration}", self.candidate.provider_id, self._location_id(), plate,
+                  BillingMode.FIXED_DURATION, duration, 0, 0, "USD", now_ms + 30_000, now_ms + 30_000,
                   max(7200, duration))
     request = AttemptRequest(self.attempt_id, self.episode_id, quote, 1, now_ms + 30_000, "approve")
     with ParkingJournal(self.journal_path) as journal:
@@ -306,20 +300,21 @@ class ParkingDaemon:
 
   def _wire_payload(self, request: AttemptRequest, evidence: VehicleEvidence, now_ns: int) -> dict[str, object]:
     assert self.candidate is not None
-    payload: dict[str, object] = {
+    payer: dict[str, object] = {}
+    if request.quote.provider_id == LAZ_PROVIDER_ID:
+      payer = {"payer_first_name": self.params.get("ParkingFirstName") or "",
+               "payer_last_name": self.params.get("ParkingLastName") or "",
+               "name_on_card": self.params.get("ParkingNameOnCard") or ""}
+    return {
+      **payer,
       "schema_version": 1, "environment": "demo", "attempt_id": request.attempt_id, "episode_id": request.episode_id,
-      "provider_id": request.quote.provider_id, "form_id": self.candidate.location_hint,
+      "provider_id": request.quote.provider_id, "form_id": request.quote.location_id,
       "qr_payload_sha256": self.candidate.payload_sha256, "plate": request.quote.plate,
       "plate_country": self.params.get("ParkingPlateCountry") or "", "plate_region": self.params.get("ParkingPlateRegion") or "",
       "duration_seconds": request.quote.duration_seconds,
       "evidence_age_ms": max(0, (now_ns - evidence.captured_mono_ns) // 1_000_000),
       "dispatch_deadline_unix_ms": request.dispatch_deadline_unix_ms,
     }
-    if request.quote.provider_id == LAZ_PROVIDER_ID:
-      # The dispatch path checks this first, so a missing payer never reaches here.
-      first, last = self._payer() or ("", "")
-      payload.update({"payer_first_name": first, "payer_last_name": last, "name_on_card": f"{first} {last}"})
-    return payload
 
   def _start_put(self, payload: dict[str, object], now_ns: int, now_ms: int) -> None:
     backend = self._backend()
@@ -544,14 +539,6 @@ class ParkingDaemon:
       self.last_reason = "BACKEND_NOT_CONFIGURED"
       self._store_summary("action_required", self.last_reason, "Configure the parking demo backend before enabling auto-pay.")
       self._publish(self._display(plate, now_ns, now_ms))
-      return
-    if self.candidate.provider_id == LAZ_PROVIDER_ID and self._payer() is None:
-      self.countdown_deadline_ns = None
-      self.last_reason = "PAYER_REQUIRED"
-      self._store_summary("action_required", self.last_reason,
-                          "Set ParkingPayerFirstName and ParkingPayerLastName before paying at this location.")
-      self._publish(ParkingDisplayState(phase="action_required", reason_code=self.last_reason, plate=plate,
-                                        requires_user_action=True))
       return
     self._request = self._make_request(plate, duration, now_ns, now_ms)
     payload = self._wire_payload(self._request, evidence, now_ns)
