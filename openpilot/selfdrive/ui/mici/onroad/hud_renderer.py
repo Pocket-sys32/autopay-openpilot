@@ -7,9 +7,8 @@ from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus, ChestnutState
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
-from openpilot.system.ui.lib.theme import (ACCENT, ACCENT_BRIGHT, ACCENT_SOFT, BORDER, SURFACE_RAISED,
-                                           TEXT, TEXT_MUTED, rgba)
-from openpilot.selfdrive.ui.mici.geometric import draw_prism_field
+from openpilot.system.ui.lib.theme import SURFACE, TEXT, TEXT_MUTED, rgba
+from openpilot.selfdrive.ui.mici.geometric import draw_brush_stroke, draw_inverted_triangle_frame
 from openpilot.system.ui.widgets import Widget
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.cereal import log
@@ -305,30 +304,23 @@ class HudRenderer(Widget):
     )
 
   def _draw_current_speed(self, rect: rl.Rectangle) -> None:
-    """Draw a fixed-footprint VISION-inspired speed instrument."""
-    card = rl.Rectangle(rect.x + 10, rect.y + rect.height - 84, 92, 72)
-    rl.draw_rectangle_rounded(card, 0.22, 8, rgba(SURFACE_RAISED, 226))
-    draw_prism_field(rl.Rectangle(card.x + 2, card.y + 2, card.width - 4, card.height - 4),
-                     rl.get_time(), cell=25, alpha=62, drift=2.8)
-    rl.draw_rectangle_rounded_lines_ex(card, 0.22, 8, 1.0, rgba(BORDER, 86))
-
-    # The same green family used by home and parking status replaces the unrelated pearlescent rainbow.
-    accent_y = int(card.y + 8)
-    accent_x = int(card.x + 10)
-    rl.draw_triangle(rl.Vector2(accent_x, accent_y), rl.Vector2(accent_x + 27, accent_y),
-                     rl.Vector2(accent_x + 19, accent_y + 6), rgba(ACCENT, 235))
-    rl.draw_triangle(rl.Vector2(accent_x + 23, accent_y), rl.Vector2(accent_x + 54, accent_y),
-                     rl.Vector2(accent_x + 43, accent_y + 6), rgba(ACCENT_BRIGHT, 235))
-    rl.draw_triangle(rl.Vector2(accent_x + 50, accent_y), rl.Vector2(accent_x + 72, accent_y),
-                     rl.Vector2(accent_x + 67, accent_y + 6), rgba(ACCENT_SOFT, 210))
+    """Put the speed inside a freestanding animated triangle—no card hiding behind the design."""
+    frame = rl.Rectangle(rect.x + 4, rect.y + rect.height - 100, 108, 94)
+    center_x = frame.x + frame.width / 2
+    left = rl.Vector2(frame.x + frame.width * 0.07, frame.y + frame.height * 0.13)
+    right = rl.Vector2(frame.x + frame.width * 0.93, frame.y + frame.height * 0.13)
+    bottom = rl.Vector2(center_x, frame.y + frame.height * 0.93)
+    rl.draw_triangle(left, bottom, right, rgba(SURFACE, 128))
+    draw_brush_stroke(frame, rl.get_time(), alpha=34)
+    draw_inverted_triangle_frame(frame, rl.get_time(), alpha=228, width=2.4)
 
     speed_text = str(round(self.speed))
     speed_size = FONT_SIZES.current_speed
     speed_text_size = measure_text_cached(self._font_display, speed_text, speed_size)
-    if speed_text_size.x > card.width - 16:
+    if speed_text_size.x > frame.width - 26:
       speed_size = 39
       speed_text_size = measure_text_cached(self._font_display, speed_text, speed_size)
-    speed_pos = rl.Vector2(card.x + (card.width - speed_text_size.x) / 2, card.y + 7)
+    speed_pos = rl.Vector2(frame.x + (frame.width - speed_text_size.x) / 2, frame.y + 9)
 
     # Soft optical depth keeps the number legible on bright camera frames
     # without turning it into a heavy outlined HUD element.
@@ -338,5 +330,5 @@ class HudRenderer(Widget):
 
     unit_text = (tr("km/h") if ui_state.is_metric else tr("mph")).upper()
     unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
-    unit_pos = rl.Vector2(card.x + (card.width - unit_text_size.x) / 2, card.y + card.height - unit_text_size.y - 2)
+    unit_pos = rl.Vector2(frame.x + (frame.width - unit_text_size.x) / 2, frame.y + 57)
     rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, rgba(TEXT_MUTED, 205))

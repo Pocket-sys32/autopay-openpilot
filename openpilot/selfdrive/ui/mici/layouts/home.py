@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import math
+import random
 import time
 
 from openpilot.cereal import log
@@ -12,8 +13,9 @@ from openpilot.system.ui.widgets.layouts import HBoxLayout
 from openpilot.system.ui.widgets.icon_widget import IconWidget
 from openpilot.system.ui.widgets.label import UnifiedLabel, gui_label
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, TextAlignment, TextAlignmentVertical
+from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.theme import ACCENT, TEXT, TEXT_DIM, TEXT_MUTED, rgba
-from openpilot.selfdrive.ui.mici.geometric import draw_prism_field
+from openpilot.selfdrive.ui.mici.geometric import draw_brush_stroke, draw_inverted_triangle_frame
 from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
 
 HOME_PADDING = 8
@@ -157,6 +159,15 @@ class MiciHomeLayout(Widget):
     self._pay_label = UnifiedLabel("Pay", font_size=88, text_color=rgba(ACCENT),
                                    font_weight=FontWeight.DISPLAY, max_width=480, wrap_text=False)
     self._pilot_label = UnifiedLabel("Pilot", font_size=88, font_weight=FontWeight.DISPLAY, max_width=480, wrap_text=False)
+    rng = random.Random(42)
+    self._dollar_positions: list[tuple[float, float]] = []
+    for _ in range(12):
+      candidates = [(rng.random(), rng.random()) for _ in range(40)]
+      position = max(candidates, key=lambda point: min(
+        ((point[0] - x) * 1.8) ** 2 + min(abs(point[1] - y), 1 - abs(point[1] - y)) ** 2
+        for x, y in self._dollar_positions
+      )) if self._dollar_positions else candidates[0]
+      self._dollar_positions.append(position)
     self._version_label = UnifiedLabel("", font_size=28, text_color=rgba(TEXT_MUTED),
                                        font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
     self._large_version_label = UnifiedLabel("", font_size=64, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
@@ -215,13 +226,42 @@ class MiciHomeLayout(Widget):
 
     return version, date_str
 
-  def _draw_geometric_background(self):
-    """A living transaction-map surface rather than generic floating currency symbols."""
-    field = rl.Rectangle(self.rect.x, self.rect.y, self.rect.width, max(1.0, self.rect.height - 50))
-    draw_prism_field(field, rl.get_time(), cell=54, alpha=42, drift=4.0)
+  def _draw_dollar_background(self):
+    """Float soft currency marks behind the brand art—the visual shorthand still fits the product."""
+    font = gui_app.font(FontWeight.DISPLAY)
+    elapsed = rl.get_time()
+    travel = max(1.0, self.rect.height - 56)
+    for index, (anchor_x, anchor_y) in enumerate(self._dollar_positions):
+      size = 24 + (index * 7 % 13)
+      progress = (anchor_y + elapsed * 6 / travel) % 1.0
+      y = (1.0 - progress) * max(1.0, travel - size)
+      x = 10 + anchor_x * max(1.0, self.rect.width - size - 20)
+      x += math.sin(elapsed * 0.35 + index * 2.4) * 5
+      edge_fade = min(1.0, progress * travel / 48, (1.0 - progress) * travel / 48)
+      rl.draw_text_ex(font, "$", rl.Vector2(self.rect.x + x, self.rect.y + y),
+                      size, 0, rgba(ACCENT, round(82 * edge_fade)))
+
+  def _draw_brand_art(self):
+    """Animate the framed PayPilot poster directly on the chestnut canvas."""
+    elapsed = rl.get_time()
+    art = rl.Rectangle(self.rect.x + 8, self.rect.y + 4, min(390, self.rect.width - 16),
+                       max(110, self.rect.height - 58))
+    draw_brush_stroke(art, elapsed, alpha=22)
+    draw_inverted_triangle_frame(art, elapsed, alpha=82, width=1.5)
+
+    # Two moving typographic reflections borrow the stacked-poster rhythm without competing with the logo.
+    font = gui_app.font(FontWeight.DISPLAY)
+    for index, opacity in enumerate((25, 13)):
+      size = 36 - index * 3
+      text = "PayPilot"
+      text_width = measure_text_cached(font, text, size).x
+      x = art.x + (art.width - text_width) / 2 + math.sin(elapsed * 0.5 + index) * 5
+      y = art.y + 94 + index * 34
+      rl.draw_text_ex(font, text, rl.Vector2(x, y), size, 0, rgba(TEXT_MUTED, opacity))
 
   def _render(self, _):
-    self._draw_geometric_background()
+    self._draw_dollar_background()
+    self._draw_brand_art()
     intro_elapsed = rl.get_time() - self._intro_started
 
     def reveal(delay: float) -> float:
@@ -233,7 +273,7 @@ class MiciHomeLayout(Widget):
     metadata_reveal = reveal(0.22)
 
     # TODO: why is there extra space here to get it to be flush?
-    text_pos = rl.Vector2(self.rect.x - 2 + HOME_PADDING, self.rect.y - 16)
+    text_pos = rl.Vector2(self.rect.x - 2 + HOME_PADDING, self.rect.y + 6)
     self._pay_label.set_text_color(rgba(ACCENT, round(255 * pay_reveal)))
     self._pay_label.set_position(text_pos.x, text_pos.y + 12 * (1.0 - pay_reveal))
     self._pay_label.render()
