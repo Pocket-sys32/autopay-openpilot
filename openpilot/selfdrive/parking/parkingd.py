@@ -614,9 +614,11 @@ class ParkingDaemon:
     )
 
   def step(self) -> None:
+    self.sm.update(0)
+    # SubMaster timestamps newly received evidence inside update(). Read the
+    # evaluation clock afterward so fresh messages do not appear future-dated.
     now_ns = time.monotonic_ns()
     now_ms = int(datetime.datetime.now(datetime.UTC).timestamp() * 1000)
-    self.sm.update(0)
     if parking_test_mode_enabled(self.params):
       self._publish_test_hud()
     self._consume_future(now_ns, now_ms)

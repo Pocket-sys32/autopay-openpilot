@@ -56,6 +56,14 @@ class FakeScanner:
     return QRScan((QRObservation(CONTROLLED_FORM_URL, "full", now_mono_ns),))
 
 
+class RealtimeSubMaster(FakeSubMaster):
+  def update(self, _timeout):
+    # Match SubMaster: new evidence receives its timestamp during update().
+    received_mono = time.monotonic()
+    for service in self.recv_time:
+      self.recv_time[service] = received_mono
+
+
 class FakePubMaster:
   def __init__(self):
     self.messages = []
@@ -320,6 +328,36 @@ class TestParkingDaemonEvidence(OpenpilotTestCase):
       daemon.countdown_deadline_ns = 0
       daemon.step()
       self.assertIsNotNone(daemon._request)
+
+  def test_newly_received_signals_allow_low_speed_qr_detection(self):
+    from unittest.mock import Mock
+
+    params = Params()
+    params.put("ParkingLicensePlate", "DEMO123", block=True)
+    params.put_bool("ParkingAutoPayEnabled", True, block=True)
+    for g82_mode in (False, True):
+      with self.subTest(g82_mode=g82_mode), tempfile.TemporaryDirectory() as directory:
+        params.put_bool("ParkingG82ModeEnabled", g82_mode, block=True)
+        scanner = Mock(wraps=FakeScanner())
+        backend = Mock(wraps=FakeBackend())
+        sm = RealtimeSubMaster(car_alive=not g82_mode, gps_speed_mps=3 * 0.44704)
+        sm.data["carState"].vEgo = 3 * 0.44704
+        sm.data["carState"].standstill = False
+        sm.data["carState"].gearShifter = car.CarState.GearShifter.drive
+        publisher = FakePubMaster()
+        daemon = ParkingDaemon(params=params, scanner=scanner, journal_path=f"{directory}/parking.db",
+                               sm=sm, pm=publisher, backend=backend)
+
+        daemon.step()
+        scanner.poll.assert_called_once()
+        self.assertIsNone(daemon.candidate)
+        daemon.step()
+        self.assertEqual(scanner.poll.call_count, 2)
+        self.assertIsNotNone(daemon.candidate)
+        self.assertTrue(publisher.messages[-1][1].parkingState.candidatePresent)
+        self.assertIsNone(daemon.countdown_deadline_ns)
+        self.assertIsNone(daemon._request)
+        backend.put_attempt.assert_not_called()
 
   def test_ambiguity_persists_through_empty_scan_and_stale_result(self):
     from unittest.mock import Mock
