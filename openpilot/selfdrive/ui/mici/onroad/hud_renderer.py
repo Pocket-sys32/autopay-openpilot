@@ -7,8 +7,7 @@ from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus, ChestnutState
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
-from openpilot.system.ui.lib.theme import SURFACE, TEXT, TEXT_MUTED, rgba
-from openpilot.selfdrive.ui.mici.geometric import draw_brush_stroke, draw_inverted_triangle_frame
+from openpilot.system.ui.lib.theme import ACCENT, ACCENT_SOFT, TEXT, TEXT_MUTED, rgba
 from openpilot.system.ui.widgets import Widget
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.cereal import log
@@ -304,15 +303,15 @@ class HudRenderer(Widget):
     )
 
   def _draw_current_speed(self, rect: rl.Rectangle) -> None:
-    """Put the speed inside a freestanding animated triangle—no card hiding behind the design."""
+    """Put a simple static triangle behind the current speed."""
     frame = rl.Rectangle(rect.x + 4, rect.y + rect.height - 100, 108, 94)
     center_x = frame.x + frame.width / 2
     left = rl.Vector2(frame.x + frame.width * 0.07, frame.y + frame.height * 0.13)
     right = rl.Vector2(frame.x + frame.width * 0.93, frame.y + frame.height * 0.13)
     bottom = rl.Vector2(center_x, frame.y + frame.height * 0.93)
-    rl.draw_triangle(left, bottom, right, rgba(SURFACE, 128))
-    draw_brush_stroke(frame, rl.get_time(), alpha=34)
-    draw_inverted_triangle_frame(frame, rl.get_time(), alpha=228, width=2.4)
+    rl.draw_triangle(left, bottom, right, rgba(ACCENT, 145))
+    for start, end in ((left, right), (right, bottom), (bottom, left)):
+      rl.draw_line_ex(start, end, 2.0, rgba(ACCENT_SOFT, 220))
 
     speed_text = str(round(self.speed))
     speed_size = FONT_SIZES.current_speed
