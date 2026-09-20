@@ -3,6 +3,7 @@
 # adding the Google account, or clearing a one-off interstitial. Run this on your own machine, not on the VM.
 #
 #   ./remote_emulator.sh            stop the worker, mirror the emulator, restart the worker on exit
+#   ./remote_emulator.sh --signin   the same, but open accounts.google.com on the device first
 #   ./remote_emulator.sh --status   report VM services, the emulator and the signed-in accounts, then exit
 #
 # The Google sign-in itself stays manual on purpose: Google refuses a WebDriver-controlled session with
@@ -100,5 +101,13 @@ fi
 
 "$adb" -s "$serial" wait-for-device
 printf 'Mirroring %s (accounts before: %s).\n' "$serial" "$(account_count 2>/dev/null || echo unknown)"
-printf 'In the device: Settings -> Passwords & accounts -> Add account -> Google, then sign in to Chrome.\n'
+if test "${1:-}" = --signin; then
+  # Signing Chrome in to the web is a separate thing from the device account, and this is the page that does
+  # it without depending on sync. Opening it here saves hunting through Chrome's menus in a small window.
+  "$adb" -s "$serial" shell am start -a android.intent.action.VIEW -d https://accounts.google.com/ >/dev/null 2>&1 \
+    || printf 'Could not open the sign-in page; browse to accounts.google.com by hand.\n' >&2
+  printf 'Opened accounts.google.com on the device. Sign in there, then check with --status.\n'
+else
+  printf 'In the device: Settings -> Passwords & accounts -> Add account -> Google, then sign in to Chrome.\n'
+fi
 ADB="$adb" scrcpy -s "$serial"
