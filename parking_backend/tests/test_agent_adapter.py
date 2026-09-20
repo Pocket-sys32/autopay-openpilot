@@ -29,6 +29,7 @@ def attempt(now_ms: int, **overrides) -> dict[str, object]:
   payload = {
     "schema_version": 2, "environment": "demo", "attempt_id": "attempt-1", "episode_id": "episode-1",
     "provider_id": "generic_agent", "form_id": "parking.example.com", "qr_url": START,
+    "payer_first_name": "Ada", "payer_last_name": "Lovelace", "name_on_card": "Ada Lovelace",
     "qr_payload_sha256": "a" * 64, "plate": "DEMO123", "plate_country": "US", "plate_region": "CA",
     "duration_seconds": 10800, "max_total_minor": 3000, "evidence_age_ms": 100,
     "dispatch_deadline_unix_ms": now_ms + 30_000,

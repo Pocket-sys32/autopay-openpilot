@@ -371,7 +371,7 @@ class ParkingDaemon:
   def _wire_payload(self, request: AttemptRequest, evidence: VehicleEvidence, now_ns: int) -> dict[str, object]:
     assert self.candidate is not None
     payer: dict[str, object] = {}
-    if request.quote.provider_id == LAZ_PROVIDER_ID:
+    if request.quote.provider_id in (LAZ_PROVIDER_ID, GENERIC_PROVIDER_ID):
       payer = {"payer_first_name": self.params.get("ParkingFirstName") or "",
                "payer_last_name": self.params.get("ParkingLastName") or "",
                "name_on_card": self.params.get("ParkingNameOnCard") or ""}

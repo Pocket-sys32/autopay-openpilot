@@ -308,6 +308,9 @@ class TestGenericAgentConfirmation(OpenpilotTestCase):
     params = Params()
     params.put_bool("IsOffroad", True, block=True)
     params.put("ParkingLicensePlate", "DEMO123", block=True)
+    params.put("ParkingFirstName", "Ada", block=True)
+    params.put("ParkingLastName", "Lovelace", block=True)
+    params.put("ParkingNameOnCard", "Ada Lovelace", block=True)
     params.put("ParkingEnvironment", "demo", block=True)
     params.put_bool("ParkingAutoPayEnabled", True, block=True)
     self.params = params
@@ -355,6 +358,9 @@ class TestGenericAgentConfirmation(OpenpilotTestCase):
     self.assertEqual(payload["qr_url"], GENERIC_QR)
     self.assertEqual(payload["form_id"], "parking.example.com")
     self.assertEqual(payload["max_total_minor"], 3000)
+    self.assertEqual(payload["payer_first_name"], "Ada")
+    self.assertEqual(payload["payer_last_name"], "Lovelace")
+    self.assertEqual(payload["name_on_card"], "Ada Lovelace")
 
   def test_the_checkout_is_published_with_its_price_and_deadline(self):
     state = self.reach_confirmation()

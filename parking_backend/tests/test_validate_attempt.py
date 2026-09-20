@@ -10,7 +10,8 @@ def generic(**overrides) -> dict[str, object]:
   payload = {**request()}
   payload.update(provider_id="generic_agent", schema_version=2, form_id="parking.example.com",
                  qr_url="https://parking.example.com/session/ABC123", max_total_minor=3000,
-                 duration_seconds=10800)
+                 duration_seconds=10800, payer_first_name="Ada", payer_last_name="Lovelace",
+                 name_on_card="Ada Lovelace")
   payload.update(overrides)
   return payload
 

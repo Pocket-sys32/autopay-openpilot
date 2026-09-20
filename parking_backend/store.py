@@ -103,6 +103,10 @@ def _check_generic(payload: dict[str, object]) -> None:
   cap = payload["max_total_minor"]
   if isinstance(cap, bool) or not isinstance(cap, int) or not 1 <= cap <= GENERIC_MAX_TOTAL_MINOR:
     raise InvalidAttempt("invalid spend cap")
+  for field in LAZ_PAYER_FIELDS:
+    value = payload[field]
+    if not isinstance(value, str) or not 1 <= len(value) <= 40 or not all(c.isascii() and (c.isalpha() or c in " -'") for c in value):
+      raise InvalidAttempt(f"invalid {field}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,7 +120,7 @@ class ProviderSpec:
 PROVIDER_SPECS: dict[str, ProviderSpec] = {
   "demo_google_form": ProviderSpec(frozenset({1, 2}), check=_check_demo_form),
   LAZ_PROVIDER_ID: ProviderSpec(frozenset({1, 2}), required=frozenset(LAZ_PAYER_FIELDS), check=_check_laz),
-  GENERIC_PROVIDER_ID: ProviderSpec(frozenset({2}), required=frozenset({"qr_url", "max_total_minor"}),
+  GENERIC_PROVIDER_ID: ProviderSpec(frozenset({2}), required=frozenset({"qr_url", "max_total_minor", *LAZ_PAYER_FIELDS}),
                                     check=_check_generic),
 }
 
