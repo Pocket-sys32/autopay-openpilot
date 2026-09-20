@@ -85,9 +85,10 @@ the Google session is lost. The command-line arguments above are not applied whi
 
 **The deployed VM currently sets `PARKING_LAZ_INJECT_CF_COOKIES=1`**, so attaching never engages there and
 every attempt runs signed out — the warm-up log says `google session cookie present: no` even right after a
-successful manual sign-in. The two are worth measuring against each other: in the attached configuration the
-browser cleared Cloudflare on its own in three probes out of four, without the solver, while keeping the
-Google session that reCAPTCHA reads. Setting `PARKING_LAZ_INJECT_CF_COOKIES=0` is what switches to it.
+successful manual sign-in. The two are worth measuring against each other: attached, and with no solver
+involved, the browser cleared Cloudflare by itself in one of the two probes run that way and reached the
+checkout form, while keeping the Google session that reCAPTCHA reads. Two probes is not enough to choose on,
+so measure it before switching; `PARKING_LAZ_INJECT_CF_COOKIES=0` is what switches to it.
 
 The two gates are separate and want different things. Cloudflare, on the entry page, issues `cf_clearance` from
 IP reputation and browser fingerprint and never reads the Google session. reCAPTCHA, at the checkout, is the one
