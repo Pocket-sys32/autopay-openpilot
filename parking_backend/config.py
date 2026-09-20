@@ -31,7 +31,23 @@ class Settings:
   laz_card_number: str
   laz_card_cvv: str
   laz_card_expiration: str
-  flaresolverr_url: str | None = None
+  flaresolverr_url: str | None
+  # Appended with defaults: tests/test_worker.py and any other caller may construct Settings positionally.
+  agent_enabled: bool = False
+  agent_prepare_timeout_s: int = 180
+  agent_confirm_timeout_s: int = 150
+  agent_commit_timeout_s: int = 90
+  agent_keepalive_s: int = 20
+  agent_max_total_minor: int = 3000
+  agent_dry_run: bool = False
+  agent_model: str = "gemini-2.5-flash"
+  agent_location: str = "us-west1"
+  agent_card_number: str = ""
+  agent_card_cvv: str = ""
+  agent_card_expiry_month: str = ""
+  agent_card_expiry_year: str = ""
+  agent_card_zip: str = ""
+  agent_diag_dir: Path = Path("/var/lib/parking-demo/agent-diag")
 
   @classmethod
   def from_environment(cls) -> Settings:
@@ -55,5 +71,21 @@ class Settings:
       laz_card_cvv=os.getenv("PARKING_LAZ_CARD_CVV", ""),
       laz_card_expiration=os.getenv("PARKING_LAZ_CARD_EXPIRATION", ""),
       flaresolverr_url=os.getenv("FLARESOLVERR_URL"),
+      agent_enabled=os.getenv("PARKING_AGENT_ENABLED", "0") == "1",
+      agent_prepare_timeout_s=int(os.getenv("PARKING_AGENT_PREPARE_TIMEOUT_S", "180")),
+      agent_confirm_timeout_s=int(os.getenv("PARKING_AGENT_CONFIRM_TIMEOUT_S", "150")),
+      agent_commit_timeout_s=int(os.getenv("PARKING_AGENT_COMMIT_TIMEOUT_S", "90")),
+      agent_keepalive_s=int(os.getenv("PARKING_AGENT_KEEPALIVE_S", "20")),
+      agent_max_total_minor=int(os.getenv("PARKING_AGENT_MAX_TOTAL_MINOR", "3000")),
+      # Stops before the pay click; how a real merchant is exercised without buying anything.
+      agent_dry_run=os.getenv("PARKING_AGENT_DRY_RUN", "0") == "1",
+      agent_model=os.getenv("PARKING_AGENT_MODEL", "gemini-2.5-flash"),
+      agent_location=os.getenv("PARKING_AGENT_LOCATION", "us-west1"),
+      # The agent's own card, kept separate from the LAZ one so enabling it is a deliberate act.
+      agent_card_number=os.getenv("PARKING_AGENT_CARD_NUMBER", ""),
+      agent_card_cvv=os.getenv("PARKING_AGENT_CARD_CVV", ""),
+      agent_card_expiry_month=os.getenv("PARKING_AGENT_CARD_EXPIRY_MONTH", ""),
+      agent_card_expiry_year=os.getenv("PARKING_AGENT_CARD_EXPIRY_YEAR", ""),
+      agent_card_zip=os.getenv("PARKING_AGENT_CARD_ZIP", ""),
+      agent_diag_dir=Path(os.getenv("PARKING_AGENT_DIAG_DIR", "/var/lib/parking-demo/agent-diag")),
     )
-

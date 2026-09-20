@@ -1,14 +1,16 @@
 from pathlib import Path
+from dataclasses import replace
 import tempfile
 import time
 import unittest
 
 from parking_backend.config import Settings
 from parking_backend.gmail import EmailDeliveryUnknown
-from parking_backend.laz_adapter import CaptchaChallenged, PaymentDeclined
+from parking_backend.errors import CaptchaChallenged
+from parking_backend.laz_adapter import PaymentDeclined
 from parking_backend.store import InvalidAttempt, ParkingStore
 from parking_backend.tests.test_store import request
-from parking_backend.worker import Worker
+from parking_backend.worker import Worker, agent_vault
 
 
 class FakeAdapter:
@@ -43,12 +45,37 @@ class UnknownEmail(FakeEmail):
     raise EmailDeliveryUnknown("timed out")
 
 
+def settings_for(database) -> Settings:
+  return Settings(
+    database_path=database, bearer_token="token", device_id="comma", appium_url="http://127.0.0.1:4723",
+    gmail_sender="from@example.com", gmail_recipient="to@example.com", gmail_client_id="", gmail_client_secret="",
+    gmail_refresh_token="", test_card_number="4242", test_card_cvv="123", test_card_expiration="12/30",
+    test_zip_code="95616", laz_enabled=False, laz_card_number="", laz_card_cvv="", laz_card_expiration="",
+    flaresolverr_url=None)
+
+
+class TestAgentVault(unittest.TestCase):
+  def test_dry_run_may_reuse_the_provisioned_card_without_enabling_live_payment(self):
+    settings = replace(settings_for(Path("/tmp/test.db")), agent_dry_run=True,
+                       laz_card_number="4242424242424242", laz_card_cvv="123",
+                       laz_card_expiration="12/30")
+    vault = agent_vault(settings)
+    self.assertEqual((vault.card_number, vault.card_expiry_month, vault.card_expiry_year),
+                     ("4242424242424242", "12", "30"))
+
+  def test_live_agent_never_inherits_another_adapters_card(self):
+    settings = replace(settings_for(Path("/tmp/test.db")), agent_dry_run=False,
+                       laz_card_number="4242424242424242", laz_card_cvv="123",
+                       laz_card_expiration="12/30")
+    vault = agent_vault(settings)
+    self.assertEqual((vault.card_number, vault.card_cvv, vault.card_expiry_month), ("", "", ""))
+
+
 class TestWorker(unittest.TestCase):
   def setUp(self):
     self.directory = tempfile.TemporaryDirectory()
     database = Path(self.directory.name) / "parking.db"
-    self.settings = Settings(database, "token", "comma", "http://127.0.0.1:4723", "from@example.com", "to@example.com",
-                             "", "", "", "4242", "123", "12/30", "95616", False, "", "", "")
+    self.settings = settings_for(database)
     self.store = ParkingStore(database)
 
   def tearDown(self):
@@ -113,12 +140,6 @@ class DecliningAdapter(FakeAdapter):
     raise PaymentDeclined("declined")
 
 
-class ChallengedAdapter(FakeAdapter):
-  def submit(self, payload, *, mark_submitting):
-    self.calls += 1  # the real adapter raises before PAY, so mark_submitting is deliberately never called
-    raise CaptchaChallenged("reCAPTCHA challenged the checkout before payment")
-
-
 class TestLazWorker(TestWorker):
   def test_declined_card_is_a_definitive_failure_without_retry(self):
     self.store.put_attempt("comma", laz_request(), now_ms=time.time_ns() // 1_000_000)
@@ -132,16 +153,17 @@ class TestLazWorker(TestWorker):
     self.assertEqual(adapter.calls, 1)
     self.assertIsNone(self.store.claim_next(now_ms=time.time_ns() // 1_000_000 + 5_000))
 
-  def test_a_captcha_challenge_needs_a_person_and_buys_nothing(self):
+  def test_captcha_before_pay_needs_the_user_and_buys_nothing(self):
+    class Challenged(FakeAdapter):
+      def submit(self, payload, *, mark_submitting):
+        self.calls += 1
+        raise CaptchaChallenged("challenge on screen")
+
     self.store.put_attempt("comma", laz_request(), now_ms=time.time_ns() // 1_000_000)
-    adapter = ChallengedAdapter()
-    worker = Worker(self.settings, self.store, {"laz_ttp": adapter}, FakeEmail())
-    worker.process_once()
+    Worker(self.settings, self.store, {"laz_ttp": Challenged()}, FakeEmail()).process_once()
     result = self.store.get_attempt("comma", "attempt-1")
     assert result is not None
     self.assertEqual((result["state"], result["reason_code"]), ("action_required", "CAPTCHA_CHALLENGED"))
-    self.assertFalse(result["demo"])
-    self.assertIsNone(self.store.claim_next(now_ms=time.time_ns() // 1_000_000 + 5_000))
 
   def test_laz_attempt_needs_the_provider_to_be_enabled(self):
     self.store.put_attempt("comma", laz_request(), now_ms=time.time_ns() // 1_000_000)

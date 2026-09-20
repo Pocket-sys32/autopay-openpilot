@@ -9,6 +9,7 @@ import time
 import requests
 
 from parking_backend.appium_adapter import CHROMEDRIVER_PATH, FormChanged, SubmissionUnknown
+from parking_backend.errors import CaptchaChallenged, PaymentDeclined, PriceLimitExceeded, ReservationRejected
 
 
 LOCATION_ID = "143245"
@@ -45,23 +46,6 @@ return [...document.querySelectorAll('iframe')].some(f => {
   return true;
 });
 """
-
-
-class PaymentDeclined(RuntimeError):
-  """The card was refused; nothing was purchased and a retry is a new, explicit user action."""
-
-
-class ReservationRejected(RuntimeError):
-  """LAZ refused the reservation (not a card decline); nothing was purchased."""
-
-
-class PriceLimitExceeded(FormChanged):
-  pass
-
-
-class CaptchaChallenged(FormChanged):
-  """reCAPTCHA put a challenge on screen. A person has to clear it, so this is action_required, like any other
-  FormChanged; raising it before PAY is clicked keeps it a state in which nothing was purchased."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -479,7 +463,10 @@ class LazAdapter:
           return f.apply(this, arguments).then(r => { r.clone().text().then(t => keep(m, r.url || u, r.status, t)); return r; },
                                                  e => { keep(m, u, 0, String(e)); throw e; }); };
         const open = XMLHttpRequest.prototype.open;
-        XMLHttpRequest.prototype.open = function(m, u) { this.addEventListener('loadend', () => keep(m, u, this.status, this.responseText)); return open.apply(this, arguments); };
+        XMLHttpRequest.prototype.open = function(m, u) {
+          this.addEventListener('loadend', () => keep(m, u, this.status, this.responseText));
+          return open.apply(this, arguments);
+        };
       """)
     except Exception:
       pass  # diagnostics must never change the recorded outcome

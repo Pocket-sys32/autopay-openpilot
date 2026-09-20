@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus, ChestnutState
-from openpilot.selfdrive.ui.mici.parking_overlay import parking_test_mode_active
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -24,8 +23,8 @@ SET_SPEED_PERSISTENCE = 2.5  # seconds
 
 @dataclass(frozen=True)
 class FontSizes:
-  current_speed: int = 176
-  speed_unit: int = 66
+  current_speed: int = 46
+  speed_unit: int = 13
   max_speed: int = 36
   set_speed: int = 112
 
@@ -127,7 +126,6 @@ class HudRenderer(Widget):
     self._txt_chestnut: rl.Texture = gui_app.texture('icons_mici/chestnut.png', 60, 44)
     self._txt_chestnut_green: rl.Texture = gui_app.texture('icons_mici/chestnut_green.png', 60, 44)
     self._txt_chestnut_orange: rl.Texture = gui_app.texture('icons_mici/chestnut_orange.png', 75, 44)
-    self._txt_car: rl.Texture = gui_app.texture('icons_mici/settings/device/lkas.png', 86, 44)
     self._chestnut_icon: rl.Texture | None = None
     self._wheel_alpha_filter = FirstOrderFilter(0, 0.05, 1 / gui_app.target_fps)
     self._wheel_y_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
@@ -182,6 +180,7 @@ class HudRenderer(Widget):
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
 
+    self._draw_current_speed(rect)
     self._torque_bar.render(rect)
 
     if self.is_cruise_set:
@@ -189,16 +188,7 @@ class HudRenderer(Widget):
 
     self._draw_model_source(rect)
 
-    self._draw_steering_wheel(rect)
-
   def _draw_model_source(self, rect: rl.Rectangle) -> None:
-    if parking_test_mode_active():
-      icon = self._txt_car
-      pos = rl.Vector2(rect.x + rect.width - 10 - icon.width,
-                       rect.y + rect.height - 14 - (self._txt_wheel.height + icon.height) / 2)
-      rl.draw_texture_ex(icon, pos, 0.0, 1.0, rl.Color(255, 255, 255, int(255 * 0.9)))
-      return
-
     if ui_state.sm.recv_frame['selfdriveState'] < ui_state.started_frame:
       return
 
@@ -312,13 +302,34 @@ class HudRenderer(Widget):
     )
 
   def _draw_current_speed(self, rect: rl.Rectangle) -> None:
-    """Draw the current vehicle speed and unit."""
-    speed_text = str(round(self.speed))
-    speed_text_size = measure_text_cached(self._font_bold, speed_text, FONT_SIZES.current_speed)
-    speed_pos = rl.Vector2(rect.x + rect.width / 2 - speed_text_size.x / 2, 180 - speed_text_size.y / 2)
-    rl.draw_text_ex(self._font_bold, speed_text, speed_pos, FONT_SIZES.current_speed, 0, COLORS.WHITE)
+    """Draw a fixed-footprint VISION-inspired speed instrument."""
+    card = rl.Rectangle(rect.x + 10, rect.y + rect.height - 84, 92, 72)
+    rl.draw_rectangle_rounded(card, 0.22, 8, rl.Color(18, 21, 26, 218))
+    rl.draw_rectangle_rounded_lines_ex(card, 0.22, 8, 1.0, rl.Color(218, 226, 238, 72))
 
-    unit_text = tr("km/h") if ui_state.is_metric else tr("mph")
+    # Restrained optical accent inspired by the VISION series' pearlescent trim.
+    accent_y = int(card.y + 8)
+    accent_x = int(card.x + 10)
+    rl.draw_rectangle_gradient_h(accent_x, accent_y, 36, 2,
+                                 rl.Color(90, 224, 237, 210), rl.Color(165, 139, 255, 210))
+    rl.draw_rectangle_gradient_h(accent_x + 36, accent_y, 36, 2,
+                                 rl.Color(165, 139, 255, 210), rl.Color(237, 142, 205, 180))
+
+    speed_text = str(round(self.speed))
+    speed_size = FONT_SIZES.current_speed
+    speed_text_size = measure_text_cached(self._font_display, speed_text, speed_size)
+    if speed_text_size.x > card.width - 16:
+      speed_size = 39
+      speed_text_size = measure_text_cached(self._font_display, speed_text, speed_size)
+    speed_pos = rl.Vector2(card.x + (card.width - speed_text_size.x) / 2, card.y + 7)
+
+    # Soft optical depth keeps the number legible on bright camera frames
+    # without turning it into a heavy outlined HUD element.
+    rl.draw_text_ex(self._font_display, speed_text, rl.Vector2(speed_pos.x + 1, speed_pos.y + 2),
+                    speed_size, 0, rl.Color(0, 0, 0, 105))
+    rl.draw_text_ex(self._font_display, speed_text, speed_pos, speed_size, 0, rl.Color(245, 247, 250, 250))
+
+    unit_text = (tr("km/h") if ui_state.is_metric else tr("mph")).upper()
     unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
-    unit_pos = rl.Vector2(rect.x + rect.width / 2 - unit_text_size.x / 2, 290 - unit_text_size.y / 2)
-    rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
+    unit_pos = rl.Vector2(card.x + (card.width - unit_text_size.x) / 2, card.y + card.height - unit_text_size.y - 2)
+    rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, rl.Color(196, 204, 216, 205))

@@ -8,7 +8,8 @@ from starlette.concurrency import run_in_threadpool
 
 from parking_backend.config import Settings
 from parking_backend.qr_decode import InvalidSnapshot, decode_jpeg
-from parking_backend.store import AttemptConflict, InvalidAttempt, ParkingStore
+from parking_backend.store import (AttemptConflict, DecisionConflict, DecisionExpired, InvalidAttempt,
+                                   ParkingStore)
 
 
 settings = Settings.from_environment()
@@ -68,6 +69,27 @@ def get_attempt(attempt_id: str, device_id: str = Depends(authenticate)) -> dict
   result = store.get_attempt(device_id, attempt_id)
   if result is None:
     raise HTTPException(status.HTTP_404_NOT_FOUND, "attempt not found")
+  return result
+
+
+@app.post("/v1/attempts/{attempt_id}/decision")
+def post_decision(attempt_id: str, payload: dict[str, object], device_id: str = Depends(authenticate)) -> dict[str, object]:
+  """Authorize or refuse a checkout the agent parked at. The quote hash binds the decision to exactly the
+  summary the device rendered."""
+  if payload.get("attempt_id") != attempt_id:
+    raise HTTPException(status.HTTP_400_BAD_REQUEST, "attempt ID does not match path")
+  decision, quote_hash = payload.get("decision"), payload.get("quote_hash")
+  if decision not in ("confirm", "cancel") or not isinstance(quote_hash, str) or len(quote_hash) != 64:
+    raise HTTPException(status.HTTP_400_BAD_REQUEST, "decision must name a valid choice and quote hash")
+  try:
+    result, outcome = store.record_decision(device_id, attempt_id, decision, quote_hash)
+  except KeyError as exc:
+    raise HTTPException(status.HTTP_404_NOT_FOUND, "attempt not found") from exc
+  except DecisionExpired as exc:
+    raise HTTPException(status.HTTP_410_GONE, str(exc)) from exc
+  except DecisionConflict as exc:
+    raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+  result["decision_outcome"] = outcome
   return result
 
 

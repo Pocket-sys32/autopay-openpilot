@@ -62,7 +62,7 @@ def livestream(started: bool, params: Params, CP: car.CarParams) -> bool:
   return params.get_bool("IsLiveStreaming")
 
 def parking_test_mode(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return params.get_bool("ParkingTestMode") and not params.get_bool("IsReleaseBranch")
+  return not started and params.get_bool("ParkingTestMode") and not params.get_bool("IsReleaseBranch")
 
 def or_(*fns):
   return lambda *args: operator.or_(*(fn(*args) for fn in fns))

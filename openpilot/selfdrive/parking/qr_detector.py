@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from io import BytesIO
 import time
+from typing import Protocol
 
 import numpy as np
 
 from openpilot.cereal.visionipc import VisionStreamType
 from openpilot.common import qrcode
+from openpilot.selfdrive.parking.backend_client import BackendAttemptResponse
 
 
 QRDecoder = Callable[[np.ndarray], str | None]
@@ -75,7 +79,7 @@ def scan_gray(gray: np.ndarray, *, decoder: QRDecoder = qrcode.decode,
 
 
 class CandidateConsensus:
-  """Promote a payload only after repeated, recent, non-conflicting observations."""
+  """Promote a repeated payload with a strict majority of recent scans."""
 
   def __init__(self, minimum_observations: int = 2, window_seconds: float = 3.0):
     if minimum_observations < 2:
@@ -98,27 +102,30 @@ class CandidateConsensus:
       return None
 
     payload = payloads[0]
-    if any(len(previous) != 1 or previous[0] != payload for _, previous in self._history):
-      return None
     count = sum(previous == (payload,) for _, previous in self._history)
-    return payload if count >= self.minimum_observations else None
+    # Ambiguous scans count against the majority without blocking the window.
+    return payload if count >= self.minimum_observations and count * 2 > len(self._history) else None
 
   def clear(self) -> None:
     self._history.clear()
 
 
 class VisionQRScanner:
-  """Nonblocking VisionIPC sampler. It owns no payment or policy behavior."""
+  """Capture snapshots locally and ask the authenticated backend to decode them."""
 
-  SCAN_INTERVAL_NS = int(0.2e9)
+  # parkingd runs at 2 Hz in production, so this permits one snapshot per tick.
+  SCAN_INTERVAL_NS = int(0.45e9)
+  MAX_JPEG_BYTES = 768 * 1024
 
-  def __init__(self, *, prefer_wide: bool = False):
+  def __init__(self, *, backend_provider: Callable[[], SnapshotBackend | None], prefer_wide: bool = False):
     self._clients: dict = {}
     self._last_scan_mono_ns = 0
+    self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="parking-snapshot")
+    self._future: Future[BackendAttemptResponse] | None = None
+    self._future_mono_ns = 0
+    self._backend_provider = backend_provider
     self._preferred_streams = (
-      (VisionStreamType.VISION_STREAM_WIDE_ROAD, VisionStreamType.VISION_STREAM_NARROW_ROAD)
-      if prefer_wide else
-      (VisionStreamType.VISION_STREAM_NARROW_ROAD, VisionStreamType.VISION_STREAM_WIDE_ROAD)
+      VisionStreamType.VISION_STREAM_WIDE_ROAD if prefer_wide else VisionStreamType.VISION_STREAM_NARROW_ROAD,
     )
 
   def _connect(self) -> bool:
@@ -139,15 +146,42 @@ class VisionQRScanner:
         connected = True
     return connected
 
+  @staticmethod
+  def _encode(gray: np.ndarray) -> bytes:
+    from PIL import Image
+
+    output = BytesIO()
+    Image.fromarray(gray, mode="L").save(output, format="JPEG", quality=72, optimize=False)
+    jpeg = output.getvalue()
+    if len(jpeg) > VisionQRScanner.MAX_JPEG_BYTES:
+      raise ValueError("encoded parking snapshot exceeded size limit")
+    return jpeg
+
+  def _consume(self) -> QRScan | None:
+    if self._future is None or not self._future.done():
+      return None
+    future, observed_ns = self._future, self._future_mono_ns
+    self._future = None
+    try:
+      response = future.result()
+    except Exception:
+      return QRScan(())
+    if response.status_code != 200:
+      return QRScan(())
+    raw_payloads = response.body.get("payloads", [])
+    if not isinstance(raw_payloads, list):
+      return QRScan(())
+    payloads = tuple(value for value in raw_payloads if isinstance(value, str) and len(value) <= 2048)
+    return QRScan(tuple(QRObservation(value, "vm", observed_ns) for value in sorted(set(payloads))))
+
   def poll(self, now_mono_ns: int | None = None) -> QRScan | None:
     now_mono_ns = time.monotonic_ns() if now_mono_ns is None else now_mono_ns
-    if now_mono_ns - self._last_scan_mono_ns < self.SCAN_INTERVAL_NS:
-      return None
-    if not self._connect():
-      return None
-
-    observations: list[QRObservation] = []
-    scanned = False
+    completed = self._consume()
+    if self._future is not None or now_mono_ns - self._last_scan_mono_ns < self.SCAN_INTERVAL_NS:
+      return completed
+    backend = self._backend_provider()
+    if backend is None or not self._connect():
+      return completed
     for stream_type in self._preferred_streams:
       client = self._clients.get(stream_type)
       if client is None:
@@ -155,19 +189,15 @@ class VisionQRScanner:
       frame = client.recv(timeout_ms=0)
       if frame is None:
         continue
-      scanned = True
       y = np.frombuffer(frame.data, dtype=np.uint8, count=frame.height * frame.stride).reshape(frame.height, frame.stride)
-      gray = y[:, :frame.width].copy()
-      observations.extend(scan_gray(gray, observed_mono_ns=now_mono_ns).observations)
-    if not scanned:
-      return None
+      jpeg = self._encode(y[:, :frame.width])
+      stream_id = "wide" if stream_type == VisionStreamType.VISION_STREAM_WIDE_ROAD else "narrow"
+      self._future = self._executor.submit(backend.decode_snapshot, jpeg, stream_id)
+      self._future_mono_ns = now_mono_ns
+      self._last_scan_mono_ns = now_mono_ns
+      break
+    return completed
 
-    self._last_scan_mono_ns = now_mono_ns
-    seen: set[str] = set()
-    unique: list[QRObservation] = []
-    for observation in observations:
-      if observation.payload in seen:
-        continue
-      seen.add(observation.payload)
-      unique.append(observation)
-    return QRScan(tuple(unique))
+
+class SnapshotBackend(Protocol):
+  def decode_snapshot(self, jpeg: bytes, stream_id: str) -> BackendAttemptResponse: ...

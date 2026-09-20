@@ -147,6 +147,87 @@ which the worker records as `action_required` / `CAPTCHA_CHALLENGED` with nothin
 snapshotted as `5-recaptcha-after-pay` and noted in the message. Clear a challenge by hand with
 `remote_emulator.sh`; the cleared state lives in the same persistent profile.
 
+## The generic parking agent
+
+`generic_agent` handles a QR nobody has written an adapter for. It opens the URL in the emulator's Chrome,
+observes each screen, lets a multimodal model choose one bounded UI action at a time, and navigates to the
+provider's checkout. There it stops. The comma shows the driver the merchant, the location, the vehicle, the
+duration and the total, and nothing is paid until they slide to confirm.
+
+The model chooses which element to act on next. It does not hold the card, the profile, the spend cap or the
+payment decision. In particular:
+
+- The total shown, hashed and charged is parsed off the page. Whatever figure the model reports is discarded,
+  and the page is re-read for exact equality immediately before the pay click; any change aborts the purchase.
+- The model addresses elements only by ids the current screen handed out. Card fields are never given one, so
+  the only way a card value reaches a page is `FILL_SECRET`, which names a slot and is refused until the
+  driver has confirmed.
+- Navigation is confined to the scanned URL's site and narrowly listed payment hosts. Common country-code
+  suffixes such as `co.uk` are kept separate rather than treated as one shared site.
+- A captcha, an account, a one-time code or an app-only flow ends the attempt as `action_required`. The agent
+  never attempts to work around a security check.
+- Both spend caps bind: the driver's `ParkingMaxTotalMinor` and the VM's `PARKING_AGENT_MAX_TOTAL_MINOR`.
+  The lower one wins.
+
+Enable it with `PARKING_AGENT_ENABLED=1`. Settings, all optional except the card:
+
+```text
+PARKING_AGENT_ENABLED=1
+PARKING_AGENT_MAX_TOTAL_MINOR=3000     # hard ceiling in minor units
+PARKING_AGENT_DRY_RUN=0                # 1 reaches the checkout and stops before paying
+PARKING_AGENT_MODEL=gemini-2.5-flash
+PARKING_AGENT_LOCATION=us-west1
+PARKING_AGENT_DIAG_DIR=/var/lib/parking-demo/agent-diag
+PARKING_AGENT_CARD_NUMBER=...          # secrets; keep these in Secret Manager
+PARKING_AGENT_CARD_CVV=...
+PARKING_AGENT_CARD_EXPIRY_MONTH=...
+PARKING_AGENT_CARD_EXPIRY_YEAR=...
+PARKING_AGENT_CARD_ZIP=...
+PARKING_AGENT_FIRST_NAME=...           # request values take precedence when the device supplies them
+PARKING_AGENT_LAST_NAME=...
+PARKING_AGENT_NAME_ON_CARD=...
+PARKING_AGENT_EMAIL=...                # falls back to the PARKING_LAZ_* equivalents
+PARKING_AGENT_MOBILE=...
+PARKING_AGENT_ZIP=...
+PARKING_AGENT_STREET=...
+PARKING_AGENT_ATTACH_CHROME=1          # see the attach-mode note above
+PARKING_AGENT_WARMUP_URLS=             # empty string turns warming off
+```
+
+The request always supplies the normalized HTTPS QR URL, plate, requested duration, and device spend cap.
+Contact and billing identity are provider-dependent: first/last name and name on card can arrive with the
+request, while email, mobile, postal code, and street come from the protected backend environment. A live
+generic payment additionally requires the dedicated card number, CVV, expiry month/year, and billing postal
+code above. The card values remain in the backend vault; Vertex sees only the available profile-field names,
+redacted page text, bounded interactive-node labels, recent action names, and redacted screenshots.
+
+This is portable to ordinary guest web checkouts, not guaranteed for every carrier. Standard HTML controls
+and recognizable Stripe, CardConnect, Adyen, Braintree, Square, or PayPal-style payment frames are supported.
+Mandatory accounts, OTP/MFA, CAPTCHA, app-only checkout, inaccessible canvas/shadow widgets, or an unusual
+tokenizer end as a safe `action_required`/failure instead of being bypassed or guessed through.
+
+Run it with `PARKING_AGENT_DRY_RUN=1` against a real provider first. That exercises the whole path, including
+the confirmation prompt on the comma, and stops before spending anything.
+
+Each run writes bounded mode-0600 JSON metadata to `PARKING_AGENT_DIAG_DIR`: action names, phase, latency,
+screenshot usage, and Vertex token counts when the API reports them. Diagnostics retain at most 50 files and
+never contain DOM text, prompts, model replies, screenshots, profile values, or card values.
+
+In dry-run mode only, missing `PARKING_AGENT_CARD_*` fields fall back to the existing LAZ card settings so
+field classification can be tested. The deterministic dry-run gate still stops before PAY. With dry run off,
+there is no fallback: live generic payment requires the dedicated agent card settings.
+
+The model runs on Vertex AI as the VM's own service account, so there is no API key. `aiplatform.googleapis.com`
+is already enabled on the project, but the service account needs the role granted once:
+
+```bash
+gcloud projects add-iam-policy-binding fieldscout-497018 \
+  --member serviceAccount:parking-demo-vm@fieldscout-497018.iam.gserviceaccount.com \
+  --role roles/aiplatform.user
+```
+
+Add `ParkingMaxTotalMinor` to the comma parameters to set the driver's own ceiling; it defaults to 3000.
+
 ## Gmail
 
 Create an OAuth desktop client in `fieldscout-497018`, enable the Gmail API, and add `pocketsfast@gmail.com` as a test user. Run `oauth_authorize.py` locally and place the resulting refresh token in the protected environment file. The service requests only `gmail.send`.

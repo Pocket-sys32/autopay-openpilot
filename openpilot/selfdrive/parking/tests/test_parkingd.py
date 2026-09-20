@@ -55,6 +55,9 @@ class FakePubMaster:
 
 
 class FakeBackend:
+  def decode_snapshot(self, jpeg, stream_id):
+    return BackendAttemptResponse(200, {"payloads": [CONTROLLED_FORM_URL], "camera": stream_id, "retained": False})
+
   def put_attempt(self, attempt_id, payload):
     return BackendAttemptResponse(202, {
       "attempt_id": attempt_id,
@@ -68,11 +71,75 @@ class FakeBackend:
     return self.put_attempt(attempt_id, {})
 
 
+GENERIC_QR = "https://parking.example.com/session/ABC123"
+CONFIRMATION = {
+  "quote_hash": "c" * 64, "expires_at_unix_ms": 9_000_000, "merchant": "Example Garage",
+  "merchant_host": "parking.example.com", "location_label": "123 Main St", "plate": "DEMO123",
+  "duration_seconds": 3600, "total_minor": 1450, "currency": "USD", "line_items": [["Parking", 1450]],
+}
+
+
+class GenericScanner:
+  def poll(self, now_mono_ns):
+    return QRScan((QRObservation(GENERIC_QR, "full", now_mono_ns),))
+
+
+class ConfirmingBackend:
+  """Holds an attempt at confirmation_required until a decision arrives, like the real backend."""
+
+  def __init__(self):
+    self.decisions: list[tuple[str, str]] = []
+    self.payloads: list[dict] = []
+
+  def _body(self, attempt_id):
+    if self.decisions:
+      return {"attempt_id": attempt_id, "state": "succeeded", "reason_code": "AGENT_PAID",
+              "email_status": "sent", "updated_unix_ms": 2_000_000, "confirmation": None}
+    return {"attempt_id": attempt_id, "state": "confirmation_required", "reason_code": "CHECKOUT_READY",
+            "email_status": "pending", "updated_unix_ms": 1_000_000, "confirmation": dict(CONFIRMATION)}
+
+  def decode_snapshot(self, jpeg, stream_id):
+    return BackendAttemptResponse(200, {"payloads": [GENERIC_QR], "camera": stream_id, "retained": False})
+
+  def put_attempt(self, attempt_id, payload):
+    self.payloads.append(payload)
+    return BackendAttemptResponse(202, self._body(attempt_id))
+
+  def get_attempt(self, attempt_id):
+    return BackendAttemptResponse(200, self._body(attempt_id))
+
+  def post_decision(self, attempt_id, decision, quote_hash):
+    self.decisions.append((decision, quote_hash))
+    return BackendAttemptResponse(200, self._body(attempt_id))
+
+
 def panda(ignition_line, ignition_can, panda_type="tres"):
   return SimpleNamespace(ignitionLine=ignition_line, ignitionCan=ignition_can, pandaType=panda_type)
 
 
 class TestParkingDaemonEvidence(OpenpilotTestCase):
+  def setUp(self):
+    super().setUp()
+    Params().put_bool("IsOffroad", True, block=True)
+
+  def test_simulation_refuses_real_onroad(self):
+    params = Params()
+    params.put_bool("ParkingTestMode", True, block=True)
+    params.put_bool("IsOffroad", False, block=True)
+    self.assertFalse(parking_test_mode_enabled(params))
+    self.assertFalse(params.get_bool("ParkingTestMode"))
+
+  def test_simulation_drive_park_and_departure(self):
+    params = Params()
+    signals = SimulatedParkedSignals(params)
+    for parked in (False, True, False):
+      params.put_bool("ParkingTestParked", parked, block=True)
+      signals.update(0)
+      evidence = vehicle_evidence_from_sm(signals, IgnitionEdgeTracker(), time.monotonic_ns())
+      self.assertEqual(evidence.standstill, parked)
+      self.assertEqual(evidence.gear, "park" if parked else "drive")
+      self.assertEqual(evidence.v_ego_mps == 0, parked)
+
   def test_development_test_mode_is_release_gated(self):
     params = Params()
     params.put_bool("ParkingTestMode", True, block=True)
@@ -182,3 +249,169 @@ class TestParkingDaemonEvidence(OpenpilotTestCase):
       daemon.step()
       self.assertIsNone(daemon._request)
       self.assertEqual(daemon.episode_id, "")
+
+  def test_approach_detection_survives_until_stop_and_speed_gates_scanning(self):
+    from unittest.mock import Mock
+    from openpilot.selfdrive.parking.parkingd import MAX_SNAPSHOT_SPEED_MPS
+
+    params = Params()
+    params.put("ParkingLicensePlate", "DEMO123", block=True)
+    params.put_bool("ParkingAutoPayEnabled", True, block=True)
+    scanner = Mock(wraps=FakeScanner())
+    sm = FakeSubMaster()
+    with tempfile.TemporaryDirectory() as directory:
+      daemon = ParkingDaemon(params=params, scanner=scanner, journal_path=f"{directory}/parking.db",
+                             sm=sm, pm=FakePubMaster(), backend=FakeBackend())
+      state = sm.data["carState"]
+      state.vEgo, state.standstill, state.gearShifter = 2.0, False, car.CarState.GearShifter.drive
+      daemon.step()
+      daemon.step()
+      self.assertIsNotNone(daemon.candidate)
+      episode = daemon.episode_id
+      daemon.step()
+      self.assertEqual(daemon.episode_id, episode)
+      self.assertIsNone(daemon.countdown_deadline_ns)
+      scanner.poll.return_value = QRScan(())
+      state.vEgo, state.standstill, state.gearShifter = 0.0, True, car.CarState.GearShifter.park
+      daemon.step()
+      self.assertEqual(daemon.episode_id, episode)
+      self.assertTrue(daemon._candidate_valid(time.monotonic_ns()))
+      scanner.poll.reset_mock()
+      state.vEgo = MAX_SNAPSHOT_SPEED_MPS + 1
+      daemon.step()
+      scanner.poll.assert_not_called()
+      self.assertIsNone(daemon.candidate)
+
+  def test_ambiguity_persists_through_empty_scan_and_stale_result(self):
+    from unittest.mock import Mock
+
+    with tempfile.TemporaryDirectory() as directory:
+      daemon = ParkingDaemon(params=Params(), scanner=Mock(), journal_path=f"{directory}/parking.db",
+                             sm=FakeSubMaster(), pm=FakePubMaster(), backend=FakeBackend())
+      for now in (1, 2):
+        daemon.scanner.poll.return_value = QRScan((QRObservation(CONTROLLED_FORM_URL, "vm", now),))
+        daemon._observe_camera(now)
+      daemon.scanner.poll.return_value = QRScan((QRObservation("other", "vm", 3),))
+      daemon._observe_camera(3)
+      self.assertFalse(daemon._candidate_valid(3))
+      daemon.scanner.poll.return_value = QRScan(())
+      daemon._observe_camera(4)
+      self.assertFalse(daemon._candidate_valid(4))
+      daemon.scanner.poll.return_value = QRScan((QRObservation(CONTROLLED_FORM_URL, "vm", 1),))
+      daemon._observe_camera(4_000_000_000)
+      self.assertEqual(daemon.candidate.observed_mono_ns, 2)
+
+
+class TestGenericAgentConfirmation(OpenpilotTestCase):
+  def setUp(self):
+    super().setUp()
+    params = Params()
+    params.put_bool("IsOffroad", True, block=True)
+    params.put("ParkingLicensePlate", "DEMO123", block=True)
+    params.put("ParkingFirstName", "Ada", block=True)
+    params.put("ParkingLastName", "Lovelace", block=True)
+    params.put("ParkingNameOnCard", "Ada Lovelace", block=True)
+    params.put("ParkingEnvironment", "demo", block=True)
+    params.put_bool("ParkingAutoPayEnabled", True, block=True)
+    self.params = params
+    self.backend = ConfirmingBackend()
+    self.publisher = FakePubMaster()
+    self.directory = tempfile.TemporaryDirectory()
+    self.daemon = ParkingDaemon(
+      params=params, scanner=GenericScanner(), journal_path=f"{self.directory.name}/parking.db",
+      sm=FakeSubMaster(panda_states=()), pm=self.publisher, backend=self.backend,
+    )
+    self.daemon.intent_config = IntentConfig(IntentProfile.AUTOMATIC, stationary_debounce_ns=0)
+
+  def tearDown(self):
+    self.directory.cleanup()
+    super().tearDown()
+
+  def drain(self):
+    """Settle any in-flight backend call. A decision is only dispatched when the single executor slot is
+    free; polls resolve in milliseconds against a 2 s poll interval, so this is a test-timing concern."""
+    for _ in range(3):
+      if self.daemon._future is not None:
+        self.daemon._future.result(timeout=2)
+      self.daemon.step()
+      if self.daemon._future is None:
+        return
+
+  def settle(self):
+    """Backend calls run on an executor, so a dispatch is only observable once its future resolves."""
+    if self.daemon._future is not None:
+      self.daemon._future.result(timeout=2)
+
+  def reach_confirmation(self):
+    for _ in range(3):
+      self.daemon.step()
+    self.daemon.countdown_deadline_ns = 0
+    self.daemon.step()          # dispatch the attempt
+    self.drain()                # consume the put, landing on confirmation_required
+    return self.publisher.messages[-1][1].parkingState
+
+  def test_an_unknown_sign_dispatches_a_v2_generic_payload(self):
+    self.reach_confirmation()
+    payload = self.backend.payloads[0]
+    self.assertEqual(payload["provider_id"], "generic_agent")
+    self.assertEqual(payload["schema_version"], 2)
+    self.assertEqual(payload["qr_url"], GENERIC_QR)
+    self.assertEqual(payload["form_id"], "parking.example.com")
+    self.assertEqual(payload["max_total_minor"], 3000)
+    self.assertEqual(payload["payer_first_name"], "Ada")
+    self.assertEqual(payload["payer_last_name"], "Lovelace")
+    self.assertEqual(payload["name_on_card"], "Ada Lovelace")
+
+  def test_the_checkout_is_published_with_its_price_and_deadline(self):
+    state = self.reach_confirmation()
+    self.assertEqual(state.phase, "confirm")
+    self.assertEqual(state.amountMinor, 1450)
+    self.assertEqual(state.currency, "USD")
+    self.assertEqual(state.zoneDisplay, "123 Main St")
+    self.assertEqual(state.providerDisplayName, "Example Garage")
+    self.assertTrue(state.requiresUserAction)
+    self.assertEqual(state.actionExpiresAtUnixMs, 9_000_000)
+    pending = self.params.get("ParkingPendingConfirmation")
+    self.assertEqual(pending["total_minor"], 1450)
+    self.assertEqual(pending["quote_hash"], "c" * 64)
+
+  def test_confirming_sends_the_hash_the_driver_was_shown(self):
+    self.reach_confirmation()
+    self.params.put_bool("ParkingConfirmRequested", True, block=True)
+    self.daemon.step()
+    self.settle()
+    self.assertEqual(self.backend.decisions, [("confirm", "c" * 64)])
+    self.assertFalse(self.params.get_bool("ParkingConfirmRequested"))  # consumed, so it cannot fire twice
+
+  def test_cancelling_never_authorizes_payment(self):
+    self.reach_confirmation()
+    self.params.put_bool("ParkingCancelRequested", True, block=True)
+    self.daemon.step()
+    self.settle()
+    self.assertEqual(self.backend.decisions, [("cancel", "c" * 64)])
+
+  def test_cancel_wins_a_simultaneous_press(self):
+    self.reach_confirmation()
+    self.params.put_bool("ParkingConfirmRequested", True, block=True)
+    self.params.put_bool("ParkingCancelRequested", True, block=True)
+    self.daemon.step()
+    self.settle()
+    self.assertEqual(self.backend.decisions, [("cancel", "c" * 64)])
+
+  def test_driving_away_cancels_instead_of_paying(self):
+    self.reach_confirmation()
+    self.daemon.sm.data["carState"].vEgo = 5.0
+    self.daemon.sm.data["carState"].standstill = False
+    self.daemon.sm.update(0)
+    self.daemon.step()
+    self.settle()
+    self.assertEqual(self.backend.decisions, [("cancel", "c" * 64)])
+
+  def test_the_pending_confirmation_is_cleared_once_it_resolves(self):
+    self.reach_confirmation()
+    self.assertIsNotNone(self.params.get("ParkingPendingConfirmation"))
+    self.params.put_bool("ParkingConfirmRequested", True, block=True)
+    self.daemon.step()
+    self.settle()
+    self.drain()
+    self.assertIsNone(self.params.get("ParkingPendingConfirmation"))

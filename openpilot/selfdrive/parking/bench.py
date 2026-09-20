@@ -7,7 +7,7 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import Ratekeeper
 from openpilot.selfdrive.parking.candidate import CONTROLLED_FORM_URL
 from openpilot.selfdrive.parking.parkingd import ParkingDaemon, SimulatedParkedSignals
-from openpilot.selfdrive.parking.qr_detector import QRObservation, QRScan, VisionQRScanner
+from openpilot.selfdrive.parking.qr_detector import QRObservation, QRScan
 
 
 class FixedQRScanner:
@@ -25,7 +25,7 @@ def main() -> None:
     raise SystemExit("Refusing to simulate parked signals without --confirm-demo")
   if params.get_bool("IsReleaseBranch"):
     raise SystemExit("Bench parked-signal simulation is disabled on release branches")
-  scanner = FixedQRScanner() if args.fixed_qr else VisionQRScanner()
+  scanner = FixedQRScanner() if args.fixed_qr else None
   daemon = ParkingDaemon(params=params, scanner=scanner, sm=SimulatedParkedSignals(),
                          pm=messaging.PubMaster(["parkingState"]))
   ratekeeper = Ratekeeper(2.0)
@@ -36,4 +36,3 @@ def main() -> None:
 
 if __name__ == "__main__":
   main()
-

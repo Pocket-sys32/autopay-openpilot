@@ -23,6 +23,21 @@ class TestQrDecode(unittest.TestCase):
     self.assertEqual(payloads, ["comma:park:demo"])
     self.assertGreaterEqual(processing_ms, 0)
 
+  def test_multiple_codes_including_inverted_and_small_modules(self):
+    for module_size in (2, 6):
+      for inverted in (False, True):
+        symbols = []
+        for payload in ("bay-one", "bay-two"):
+          modules = np.pad(np.asarray(_Qr(1, payload.encode()).modules), 4)
+          symbols.append(np.repeat(np.repeat((~modules).astype(np.uint8) * 255,
+                                            module_size, axis=0), module_size, axis=1))
+        if inverted:
+          symbols[1] = 255 - symbols[1]
+        frame = np.concatenate(symbols, axis=1)
+        output = BytesIO()
+        Image.fromarray(frame).save(output, format="JPEG", quality=90)
+        self.assertEqual(decode_jpeg(output.getvalue())[0], ["bay-one", "bay-two"])
+
   def test_rejects_non_image(self):
     with self.assertRaises(InvalidSnapshot):
       decode_jpeg(b"not a jpeg")

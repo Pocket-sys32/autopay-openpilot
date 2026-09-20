@@ -22,6 +22,20 @@ def normalize_plate(value: str) -> str:
   return "".join(c for c in normalized if c.isascii() and c.isalnum())
 
 
+NAME_MAX_LENGTH = 40
+
+
+def normalize_name(value: str) -> str:
+  """ASCII letters, spaces, hyphens and apostrophes only, with runs of spaces collapsed."""
+  normalized = unicodedata.normalize("NFKD", value)
+  cleaned = "".join(c for c in normalized if c.isascii() and (c.isalpha() or c in " -'"))
+  return re.sub(r"\s+", " ", cleaned).strip()[:NAME_MAX_LENGTH]
+
+
+def name_input_valid(value: str) -> bool:
+  return len(normalize_name(value).split()) >= 2
+
+
 def plate_input_valid(value: str) -> bool:
   plate = normalize_plate(value)
   return bool(plate) and len(plate) <= PLATE_MAX_LENGTH
@@ -58,97 +72,51 @@ class ParkingLayoutMici(NavScroller):
     super().__init__()
 
     self._auto_pay_toggle = BigParamControl(
-      "parking auto-pay",
+      "automatic parking payment",
       "ParkingAutoPayEnabled",
       toggle_callback=self._on_auto_pay_toggled,
-      description="Automatically run the controlled parking demo after a supported parking code and parked state are detected.",
+      description="Pay automatically after a supported parking sign is detected and the car is parked.",
     )
     self._auto_pay_toggle.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
 
-    self._test_mode_toggle = None
-    if not ui_state.is_release:
-      self._test_mode_toggle = BigParamControl(
-        "simulate on-road",
-        "ParkingTestMode",
-        description="Off-car proof of the driving HUD: live cameras, fake parked car signals, and the real parking demo flow. Not available on release builds.",
-      )
-
-    self._environment = GreyBigButton(
-      "environment",
-      "DEMO ONLY — no real parking purchased.",
-      gui_app.texture("icons_mici/setup/green_info.png", 64, 64),
+    self._vehicle_button = BigButton(
+      "vehicle",
+      "Add license plate",
+      description="Your license plate and registration region.",
     )
+    self._vehicle_button.set_click_callback(self._edit_plate)
+    self._vehicle_button.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
 
-    self._plate_button = BigButton(
-      "license plate",
-      "not set",
-      description="Enter the plate shown on the vehicle. Spaces and punctuation are removed, and letters are stored in uppercase.",
+    self._payment_profile_button = BigButton(
+      "payment profile",
+      "Add your name",
+      description="The name used for parking payments and receipts.",
     )
-    self._plate_button.set_click_callback(self._edit_plate)
-    self._plate_button.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
-
-    self._country_button = BigButton(
-      "plate country",
-      "not set",
-      description="Two-letter ISO country code for the license plate, such as US or CA.",
-    )
-    self._country_button.set_click_callback(self._edit_country)
-    self._country_button.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
-
-    self._region_button = BigButton(
-      "plate region",
-      "not set",
-      description="Optional state, province, or region used by a parking provider to identify the plate.",
-    )
-    self._region_button.set_click_callback(self._edit_region)
-    self._region_button.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
+    self._payment_profile_button.set_click_callback(self._edit_payment_profile)
+    self._payment_profile_button.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
 
     self._duration = BigMultiToggle(
       "default duration",
       list(DURATION_OPTIONS),
       select_callback=self._set_duration,
-      description="Select one or two hours. Changing this during the countdown restarts the five-second countdown.",
+      description="How long each new parking session should last.",
     )
     self._duration.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active() or
                                bool(ui_state.sm["carState"].standstill))
 
-    self._cancel = BigButton(
-      "cancel this stop",
-      "available during countdown",
-      description="Cancel the current detected parking episode. A new stop can trigger a new attempt.",
-    )
-    self._cancel.set_click_callback(self._cancel_episode)
-    self._cancel.set_enabled(lambda: (parking_test_mode_active() or bool(ui_state.sm["carState"].standstill)) and
-                            ui_state.sm["parkingState"].phase == "countdown")
-
-    self._live_status = GreyBigButton(
-      "backend",
-      "Not configured.",
-      gui_app.texture("icons_mici/setup/warning.png", 64, 64),
-    )
-
-    self._latest_result = GreyBigButton(
-      "latest result",
-      "No parking demo has completed yet.",
+    self._status = GreyBigButton(
+      "parking status",
+      "Setup required",
       gui_app.texture("icons_mici/setup/green_info.png", 64, 64),
     )
 
-    widgets = [
+    self._scroller.add_widgets([
       self._auto_pay_toggle,
-    ]
-    if self._test_mode_toggle is not None:
-      widgets.append(self._test_mode_toggle)
-    widgets.extend([
-      self._environment,
-      self._plate_button,
-      self._country_button,
-      self._region_button,
+      self._vehicle_button,
+      self._payment_profile_button,
       self._duration,
-      self._cancel,
-      self._latest_result,
-      self._live_status,
+      self._status,
     ])
-    self._scroller.add_widgets(widgets)
 
     ui_state.add_offroad_transition_callback(self._refresh)
     self._refresh()
@@ -163,35 +131,34 @@ class ParkingLayoutMici(NavScroller):
       return
     parking = ui_state.sm["parkingState"]
     status_text = {
-      "countdown": "Ready — edit the duration or cancel before submission.",
-      "sending": "Sending the immutable demo attempt.",
-      "processing": "Android is processing the demo form.",
-      "completed": "Demo completed — no parking purchased.",
-      "failed": "The demo failed before confirmation.",
-      "unknown": "Result unknown — the form will not be submitted again.",
-      "action_required": "Action is required before another attempt.",
+      "countdown": "Ready to start",
+      "confirm": "Confirm the price to pay",
+      "committing": "Paying…",
+      "sending": "Starting parking…",
+      "processing": "Confirming payment…",
+      "completed": "Parking is active",
+      "failed": "Parking payment failed",
+      "unknown": "Couldn't confirm parking",
+      "action_required": "Check your payment profile",
     }.get(parking.phase)
     if status_text:
-      self._latest_result.set_value(status_text)
-    if parking.lastBackendSyncUnixMs:
-      self._live_status.set_value(f"Connected · email {parking.emailStatus}")
+      self._status.set_value(status_text)
 
   def _refresh(self):
     ui_state.update_params()
     self._auto_pay_toggle.refresh()
-    if self._test_mode_toggle is not None:
-      self._test_mode_toggle.refresh()
-    self._plate_button.set_value(ui_state.params.get("ParkingLicensePlate") or "not set")
-    self._country_button.set_value(ui_state.params.get("ParkingPlateCountry") or "not set")
-    self._region_button.set_value(ui_state.params.get("ParkingPlateRegion") or "not set")
+    self._refresh_vehicle()
+    self._refresh_payment_profile()
 
     duration = ui_state.params.get("ParkingDefaultDuration", return_default=True)
     self._duration.set_value("2 hours" if duration == 7200 else "1 hour")
     backend_url = ui_state.params.get("ParkingBackendBaseUrl")
-    self._live_status.set_value("Configured for the controlled demo." if backend_url else "Not configured.")
     summary = ui_state.params.get("ParkingLatestSummary")
     message = summary.get("message") if isinstance(summary, dict) else None
-    self._latest_result.set_value(message if isinstance(message, str) and message else "No parking demo has completed yet.")
+    if isinstance(message, str) and message:
+      self._status.set_value(message)
+    else:
+      self._status.set_value("Ready" if backend_url else "Setup required")
 
   def _on_auto_pay_toggled(self, enabled: bool):
     if enabled and not ui_state.params.get("ParkingLicensePlate"):
@@ -216,47 +183,40 @@ class ParkingLayoutMici(NavScroller):
   def _save_plate(self, value: str):
     plate = normalize_plate(value)
     ui_state.params.put("ParkingLicensePlate", plate, block=True)
-    self._plate_button.set_value(plate)
+    self._refresh_vehicle()
 
-  def _edit_country(self):
-    current = ui_state.params.get("ParkingPlateCountry") or ""
+  def _refresh_vehicle(self):
+    plate = ui_state.params.get("ParkingLicensePlate") or ""
+    region = ui_state.params.get("ParkingPlateRegion") or ui_state.params.get("ParkingPlateCountry") or ""
+    self._vehicle_button.set_value(" · ".join(part for part in (plate, region) if part) or "Add license plate")
+
+  def _edit_payment_profile(self):
+    first_name = ui_state.params.get("ParkingFirstName") or ""
+    last_name = ui_state.params.get("ParkingLastName") or ""
+    current = " ".join(part for part in (first_name, last_name) if part)
     gui_app.push_widget(BigInputDialog(
-      "two-letter country code...",
-      current,
-      minimum_length=COUNTRY_CODE_LENGTH,
-      text_validator=country_input_valid,
-      confirm_callback=self._save_country,
+      "enter full name...",
+      current or ui_state.params.get("ParkingNameOnCard") or "",
+      text_validator=name_input_valid,
+      confirm_callback=self._save_payment_profile,
     ))
 
-  def _save_country(self, value: str):
-    country = normalize_country(value)
-    ui_state.params.put("ParkingPlateCountry", country, block=True)
-    self._country_button.set_value(country)
+  def _save_payment_profile(self, value: str):
+    full_name = normalize_name(value)
+    first_name, _, last_name = full_name.partition(" ")
+    ui_state.params.put("ParkingFirstName", first_name, block=True)
+    ui_state.params.put("ParkingLastName", last_name, block=True)
+    ui_state.params.put("ParkingNameOnCard", full_name, block=True)
+    self._refresh_payment_profile()
 
-  def _edit_region(self):
-    current = ui_state.params.get("ParkingPlateRegion") or ""
-    gui_app.push_widget(BigInputDialog(
-      "state, province, or region...",
-      current,
-      minimum_length=0,
-      text_validator=region_input_valid,
-      confirm_callback=self._save_region,
-    ))
-
-  def _save_region(self, value: str):
-    region = normalize_region(value)
-    if region:
-      ui_state.params.put("ParkingPlateRegion", region, block=True)
-    else:
-      ui_state.params.remove("ParkingPlateRegion")
-    self._region_button.set_value(region or "not set")
+  def _refresh_payment_profile(self):
+    first_name = ui_state.params.get("ParkingFirstName") or ""
+    last_name = ui_state.params.get("ParkingLastName") or ""
+    name = " ".join(part for part in (first_name, last_name) if part)
+    self._payment_profile_button.set_value(name or ui_state.params.get("ParkingNameOnCard") or "Add your name")
 
   def _set_duration(self, duration: str):
     if duration not in DURATION_VALUES:
       return
     ui_state.params.put("ParkingEnvironment", "demo", block=True)
     ui_state.params.put("ParkingDefaultDuration", DURATION_VALUES[duration], block=True)
-
-  def _cancel_episode(self):
-    ui_state.params.put_bool("ParkingCancelRequested", True, block=True)
-    self._cancel.set_value("cancel requested")
