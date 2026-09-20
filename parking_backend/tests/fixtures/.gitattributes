@@ -1,0 +1,2 @@
+# Small regression crops belong to this fork, not upstream's model/asset LFS store.
+*.png -filter -diff -merge -text

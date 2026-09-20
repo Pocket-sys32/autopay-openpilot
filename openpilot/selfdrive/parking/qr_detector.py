@@ -150,12 +150,17 @@ class VisionQRScanner:
   def _encode(gray: np.ndarray) -> bytes:
     from PIL import Image
 
-    output = BytesIO()
-    Image.fromarray(gray, mode="L").save(output, format="JPEG", quality=72, optimize=False)
-    jpeg = output.getvalue()
-    if len(jpeg) > VisionQRScanner.MAX_JPEG_BYTES:
-      raise ValueError("encoded parking snapshot exceeded size limit")
-    return jpeg
+    # Dense, branded signs lose their small modules at the old quality=72.
+    # Preserve detail when possible, while keeping the existing upload ceiling
+    # even for noisy night-time frames.
+    image = Image.fromarray(gray, mode="L")
+    for quality in (98, 90, 80, 72):
+      output = BytesIO()
+      image.save(output, format="JPEG", quality=quality, optimize=False)
+      jpeg = output.getvalue()
+      if len(jpeg) <= VisionQRScanner.MAX_JPEG_BYTES:
+        return jpeg
+    raise ValueError("encoded parking snapshot exceeded size limit")
 
   def _consume(self) -> QRScan | None:
     if self._future is None or not self._future.done():

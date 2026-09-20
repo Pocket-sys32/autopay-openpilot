@@ -1,7 +1,10 @@
+from io import BytesIO
+
 import numpy as np
+from PIL import Image
 
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.selfdrive.parking.qr_detector import CandidateConsensus, QRObservation, QRScan, crop_schedule, scan_gray
+from openpilot.selfdrive.parking.qr_detector import CandidateConsensus, QRObservation, QRScan, VisionQRScanner, crop_schedule, scan_gray
 
 
 class TestQRDetector(OpenpilotTestCase):
@@ -56,3 +59,27 @@ class TestQRDetector(OpenpilotTestCase):
       scanner = VisionQRScanner(backend_provider=lambda: None, prefer_wide=wide)
       self.assertEqual(scanner._preferred_streams, (stream,))
       scanner._executor.shutdown()
+
+  def test_snapshot_preserves_detail_at_high_quality(self):
+    gray = np.tile(np.arange(256, dtype=np.uint8), (760, 6))[:, :1344]
+    encoded = VisionQRScanner._encode(gray)
+    reference = BytesIO()
+    Image.fromarray(gray, mode="L").save(reference, format="JPEG", quality=98, optimize=False)
+    self.assertEqual(encoded, reference.getvalue())
+    self.assertLessEqual(len(encoded), VisionQRScanner.MAX_JPEG_BYTES)
+
+  def test_noisy_snapshot_falls_back_without_exceeding_upload_limit(self):
+    gray = np.random.default_rng(17).integers(0, 256, size=(760, 1344), dtype=np.uint8)
+    high_quality = BytesIO()
+    Image.fromarray(gray, mode="L").save(high_quality, format="JPEG", quality=98, optimize=False)
+    self.assertGreater(len(high_quality.getvalue()), VisionQRScanner.MAX_JPEG_BYTES)
+    encoded = VisionQRScanner._encode(gray)
+    self.assertLessEqual(len(encoded), VisionQRScanner.MAX_JPEG_BYTES)
+    with Image.open(BytesIO(encoded)) as image:
+      self.assertEqual(image.size, (1344, 760))
+
+  def test_snapshot_still_rejects_oversized_encoding(self):
+    from unittest.mock import patch
+
+    with patch.object(VisionQRScanner, "MAX_JPEG_BYTES", 1), self.assertRaises(ValueError):
+      VisionQRScanner._encode(np.zeros((32, 32), dtype=np.uint8))
