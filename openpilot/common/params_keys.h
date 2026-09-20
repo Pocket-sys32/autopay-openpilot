@@ -126,6 +126,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"ParkingJournalPath", {PERSISTENT | DONT_LOG, STRING}},
     {"ParkingLatestSummary", {PERSISTENT, JSON}},
     {"ParkingLicensePlate", {PERSISTENT | DONT_LOG, STRING}},
+    {"ParkingPayerFirstName", {PERSISTENT | DONT_LOG, STRING}},
+    {"ParkingPayerLastName", {PERSISTENT | DONT_LOG, STRING}},
     {"ParkingPendingPayload", {PERSISTENT | DONT_LOG, JSON}},
     {"ParkingPlateCountry", {PERSISTENT | DONT_LOG, STRING}},
     {"ParkingPlateRegion", {PERSISTENT | DONT_LOG, STRING}},

@@ -12,22 +12,39 @@ CONTROLLED_DEMO_CODE = "comma:park:demo"
 PARSER_VERSION = "demo-google-form/1"
 PROVIDER_ID = "demo_google_form"
 
+# The one allowlisted paid location. The QR at the lot encodes its entry URL; the backend re-checks the
+# location id and the stay length independently, so a payload that slipped through here still could not
+# reach a different lot.
+LAZ_ENTRY_URL = "https://clip.lazparking.com/p/143245"
+LAZ_LOCATION_ID = "143245"
+LAZ_PROVIDER_ID = "laz_ttp"
+LAZ_PARSER_VERSION = "laz-ttp/1"
+LAZ_DURATION_SECONDS = 3 * 3600  # the shortest stay this site sells, and the only one the backend accepts
+
 
 class CandidateRejected(ValueError):
   pass
 
 
 def parse_candidate(payload: str, *, observed_mono_ns: int) -> Candidate:
-  """Parse the one controlled demo QR without redirects, DNS, or network I/O."""
+  """Parse one of the allowlisted parking QRs without redirects, DNS, or network I/O.
+
+  Matching stays exact: a payload is either one of the strings below or it is refused. Nothing is
+  normalised, unescaped or followed, so a lookalike host or an appended query cannot widen the set.
+  """
   if not isinstance(payload, str):
     raise CandidateRejected("QR payload must be text")
-  if payload not in (CONTROLLED_FORM_URL, CONTROLLED_FORM_CANONICAL_URL, CONTROLLED_DEMO_CODE):
-    raise CandidateRejected("QR payload is not the controlled demo form")
+  if payload in (CONTROLLED_FORM_URL, CONTROLLED_FORM_CANONICAL_URL, CONTROLLED_DEMO_CODE):
+    provider_id, hint_type, hint, parser_version = PROVIDER_ID, "form_id", CONTROLLED_FORM_ID, PARSER_VERSION
+  elif payload == LAZ_ENTRY_URL:
+    provider_id, hint_type, hint, parser_version = LAZ_PROVIDER_ID, "location_id", LAZ_LOCATION_ID, LAZ_PARSER_VERSION
+  else:
+    raise CandidateRejected("QR payload is not an allowlisted parking location")
   return Candidate(
-    provider_id=PROVIDER_ID,
-    location_hint_type="form_id",
-    location_hint=CONTROLLED_FORM_ID,
+    provider_id=provider_id,
+    location_hint_type=hint_type,
+    location_hint=hint,
     payload_sha256=hashlib.sha256(payload.encode()).hexdigest(),
-    parser_version=PARSER_VERSION,
+    parser_version=parser_version,
     observed_mono_ns=observed_mono_ns,
   )
