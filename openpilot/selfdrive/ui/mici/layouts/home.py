@@ -13,7 +13,7 @@ from openpilot.system.ui.widgets.layouts import HBoxLayout
 from openpilot.system.ui.widgets.icon_widget import IconWidget
 from openpilot.system.ui.widgets.label import UnifiedLabel, gui_label
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, TextAlignment, TextAlignmentVertical
-from openpilot.system.ui.lib.theme import ACCENT, TEXT, TEXT_DIM, TEXT_MUTED, rgba
+from openpilot.system.ui.lib.theme import ACCENT, TEXT, TEXT_DIM, TEXT_MUTED, Rgb, rgba
 from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
 
 HOME_PADDING = 8
@@ -243,26 +243,51 @@ class MiciHomeLayout(Widget):
       rl.draw_text_ex(font, "$", rl.Vector2(self.rect.x + x, self.rect.y + y),
                       size, 0, rgba(ACCENT, opacity))
 
+  def _draw_liquid_label(self, label: UnifiedLabel, position: rl.Vector2, color: Rgb,
+                         progress: float, phase: float) -> None:
+    """Reveal a label from the bottom with a low-cost, gently rippled waterline."""
+    label.set_position(position.x, position.y)
+    if progress >= 0.999:
+      label.set_text_color(rgba(color))
+      label.render()
+      return
+
+    # Keep the unfilled letterforms barely visible while the color rises through them.
+    label.set_text_color(rgba(color, 42))
+    label.render()
+    label.set_text_color(rgba(color))
+
+    strip_count = 10
+    strip_width = max(1.0, label.text_width / strip_count)
+    label_height = label.font_size + 6
+    bottom = position.y + label_height
+    elapsed = rl.get_time()
+    for index in range(strip_count):
+      strip_x = position.x + index * strip_width
+      wave = math.sin(elapsed * 5.0 + phase + index * 0.72) * 3.0
+      waterline = max(position.y, min(bottom, bottom - progress * label_height + wave))
+      rl.begin_scissor_mode(int(strip_x), int(waterline), math.ceil(strip_width) + 1,
+                            max(1, math.ceil(bottom - waterline)))
+      label.render()
+      rl.end_scissor_mode()
+
   def _render(self, _):
     self._draw_dollar_background()
     intro_elapsed = rl.get_time() - self._intro_started
 
     def reveal(delay: float) -> float:
-      progress = max(0.0, min(1.0, (intro_elapsed - delay) / 0.38))
-      return 1.0 - (1.0 - progress) ** 3
+      progress = max(0.0, min(1.0, (intro_elapsed - delay) / 1.05))
+      return progress * progress * (3.0 - 2.0 * progress)
 
     pay_reveal = reveal(0.0)
     pilot_reveal = reveal(0.07)
-    metadata_reveal = reveal(0.22)
+    metadata_reveal = reveal(0.48)
 
     # TODO: why is there extra space here to get it to be flush?
-    text_pos = rl.Vector2(self.rect.x - 2 + HOME_PADDING, self.rect.y - 16)
-    self._pay_label.set_text_color(rgba(ACCENT, round(255 * pay_reveal)))
-    self._pay_label.set_position(text_pos.x, text_pos.y + 12 * (1.0 - pay_reveal))
-    self._pay_label.render()
-    self._pilot_label.set_text_color(rgba(TEXT, round(255 * pilot_reveal)))
-    self._pilot_label.set_position(text_pos.x + self._pay_label.text_width, text_pos.y + 12 * (1.0 - pilot_reveal))
-    self._pilot_label.render()
+    text_pos = rl.Vector2(self.rect.x - 2 + HOME_PADDING, self.rect.y - 4)
+    self._draw_liquid_label(self._pay_label, text_pos, ACCENT, pay_reveal, 0.0)
+    pilot_pos = rl.Vector2(text_pos.x + self._pay_label.text_width, text_pos.y)
+    self._draw_liquid_label(self._pilot_label, pilot_pos, TEXT, pilot_reveal, 1.4)
 
     if self._version_text is not None:
       version_pos = rl.Rectangle(text_pos.x + 4, text_pos.y + self._pay_label.font_size + 10, 100, 36)
