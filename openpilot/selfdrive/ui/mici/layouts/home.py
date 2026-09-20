@@ -13,13 +13,11 @@ from openpilot.system.ui.widgets.layouts import HBoxLayout
 from openpilot.system.ui.widgets.icon_widget import IconWidget
 from openpilot.system.ui.widgets.label import UnifiedLabel, gui_label
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, TextAlignment, TextAlignmentVertical
+from openpilot.system.ui.lib.theme import ACCENT, TEXT, TEXT_DIM, TEXT_MUTED, rgba
 from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
 
 HOME_PADDING = 8
 ALERTS_ZONE_WIDTH = 180
-# A restrained, deep metallic green inspired by BMW's Sanremo Green.
-SANREMO_GREEN = (46, 132, 91)
-
 NetworkType = log.DeviceState.NetworkType
 
 NETWORK_TYPES = {
@@ -156,7 +154,7 @@ class MiciHomeLayout(Widget):
       self._mic_icon,
     ], spacing=18)
 
-    self._pay_label = UnifiedLabel("Pay", font_size=88, text_color=rl.Color(*SANREMO_GREEN, 255),
+    self._pay_label = UnifiedLabel("Pay", font_size=88, text_color=rgba(ACCENT),
                                    font_weight=FontWeight.DISPLAY, max_width=480, wrap_text=False)
     self._pilot_label = UnifiedLabel("Pilot", font_size=88, font_weight=FontWeight.DISPLAY, max_width=480, wrap_text=False)
     # Pick scattered positions once. Favor open space, including across the
@@ -170,10 +168,10 @@ class MiciHomeLayout(Widget):
         for x, y in self._dollar_positions
       )) if self._dollar_positions else candidates[0]
       self._dollar_positions.append(position)
-    self._version_label = UnifiedLabel("", font_size=28, text_color=rl.Color(174, 174, 178, 255),
+    self._version_label = UnifiedLabel("", font_size=28, text_color=rgba(TEXT_MUTED),
                                        font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
     self._large_version_label = UnifiedLabel("", font_size=64, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
-    self._date_label = UnifiedLabel("", font_size=28, text_color=rl.Color(99, 99, 102, 255),
+    self._date_label = UnifiedLabel("", font_size=28, text_color=rgba(TEXT_DIM),
                                     font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
     self._intro_started = rl.get_time()
 
@@ -243,7 +241,7 @@ class MiciHomeLayout(Widget):
       edge_fade = min(1.0, progress * travel / 48, (1.0 - progress) * travel / 48)
       opacity = round(88 * edge_fade)
       rl.draw_text_ex(font, "$", rl.Vector2(self.rect.x + x, self.rect.y + y),
-                      size, 0, rl.Color(*SANREMO_GREEN, opacity))
+                      size, 0, rgba(ACCENT, opacity))
 
   def _render(self, _):
     self._draw_dollar_background()
@@ -259,22 +257,22 @@ class MiciHomeLayout(Widget):
 
     # TODO: why is there extra space here to get it to be flush?
     text_pos = rl.Vector2(self.rect.x - 2 + HOME_PADDING, self.rect.y - 16)
-    self._pay_label.set_text_color(rl.Color(*SANREMO_GREEN, round(255 * pay_reveal)))
+    self._pay_label.set_text_color(rgba(ACCENT, round(255 * pay_reveal)))
     self._pay_label.set_position(text_pos.x, text_pos.y + 12 * (1.0 - pay_reveal))
     self._pay_label.render()
-    self._pilot_label.set_text_color(rl.Color(255, 255, 255, round(255 * pilot_reveal)))
+    self._pilot_label.set_text_color(rgba(TEXT, round(255 * pilot_reveal)))
     self._pilot_label.set_position(text_pos.x + self._pay_label.text_width, text_pos.y + 12 * (1.0 - pilot_reveal))
     self._pilot_label.render()
 
     if self._version_text is not None:
       version_pos = rl.Rectangle(text_pos.x + 4, text_pos.y + self._pay_label.font_size + 10, 100, 36)
       self._version_label.set_text(self._version_text[0])
-      self._version_label.set_text_color(rl.Color(174, 174, 178, round(255 * metadata_reveal)))
+      self._version_label.set_text_color(rgba(TEXT_MUTED, round(255 * metadata_reveal)))
       self._version_label.set_position(version_pos.x, version_pos.y + 8 * (1.0 - metadata_reveal))
       self._version_label.render()
 
       self._date_label.set_text("  ·  " + self._version_text[1])
-      self._date_label.set_text_color(rl.Color(99, 99, 102, round(255 * metadata_reveal)))
+      self._date_label.set_text_color(rgba(TEXT_DIM, round(255 * metadata_reveal)))
       self._date_label.set_position(version_pos.x + self._version_label.text_width + 10,
                                     version_pos.y + 8 * (1.0 - metadata_reveal))
       self._date_label.render()

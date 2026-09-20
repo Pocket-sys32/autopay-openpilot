@@ -3,6 +3,8 @@ from openpilot.selfdrive.ui.mici.onroad import SIDE_PANEL_WIDTH
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.ui.lib.theme import (ACCENT_BRIGHT, BORDER, DANGER, NEUTRAL, SURFACE_RAISED, TEXT_MUTED,
+                                           WARNING, rgba)
 from openpilot.common.filter_simple import FirstOrderFilter
 
 class ConfidenceBall(Widget):
@@ -41,24 +43,24 @@ class ConfidenceBall(Widget):
     # confidence zones
     if ui_state.status == UIStatus.ENGAGED or self._demo:
       if self._confidence_filter.x > 0.5:
-        status_color = rl.Color(74, 220, 190, 255)
+        status_color = rgba(ACCENT_BRIGHT)
       elif self._confidence_filter.x > 0.2:
-        status_color = rl.Color(255, 178, 72, 255)
+        status_color = rgba(WARNING)
       else:
-        status_color = rl.Color(255, 102, 118, 255)
+        status_color = rgba(DANGER)
 
     elif ui_state.status == UIStatus.OVERRIDE:
-      status_color = rl.Color(225, 230, 238, 255)
+      status_color = rgba(TEXT_MUTED)
 
     else:
-      status_color = rl.Color(92, 98, 108, 255)
+      status_color = rgba(NEUTRAL)
 
     rail_x = content_rect.x + content_rect.width / 2 - 2
     rail = rl.Rectangle(rail_x, rail_top, 4, rail_height)
-    rl.draw_rectangle_rounded(rail, 1.0, 6, rl.Color(200, 207, 218, 42))
+    rl.draw_rectangle_rounded(rail, 1.0, 6, rgba(BORDER, 48))
 
     marker = rl.Rectangle(content_rect.x + (content_rect.width - 28) / 2, marker_y - 6, 28, 12)
-    rl.draw_rectangle_rounded(marker, 0.8, 8, rl.Color(16, 19, 24, 235))
-    rl.draw_rectangle_rounded_lines_ex(marker, 0.8, 8, 1.0, rl.Color(225, 231, 240, 75))
+    rl.draw_rectangle_rounded(marker, 0.8, 8, rgba(SURFACE_RAISED, 235))
+    rl.draw_rectangle_rounded_lines_ex(marker, 0.8, 8, 1.0, rgba(BORDER, 82))
     indicator = rl.Rectangle(marker.x + 5, marker.y + 4, marker.width - 10, 4)
     rl.draw_rectangle_rounded(indicator, 1.0, 4, status_color)

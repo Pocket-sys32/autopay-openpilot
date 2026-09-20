@@ -1,12 +1,13 @@
 import pyray as rl
 from collections.abc import Callable
 from openpilot.system.ui.lib.application import MousePos
+from openpilot.system.ui.lib.theme import ACCENT, rgba
 from openpilot.system.ui.widgets import Widget
 
-ON_COLOR = rl.Color(51, 171, 76, 255)
+ON_COLOR = rgba(ACCENT)
 OFF_COLOR = rl.Color(0x39, 0x39, 0x39, 255)
 KNOB_COLOR = rl.WHITE
-DISABLED_ON_COLOR = rl.Color(0x22, 0x77, 0x22, 255)  # Dark green when disabled + on
+DISABLED_ON_COLOR = rgba(ACCENT, 145)
 DISABLED_OFF_COLOR = rl.Color(0x39, 0x39, 0x39, 255)
 DISABLED_KNOB_COLOR = rl.Color(0x88, 0x88, 0x88, 255)
 WIDTH, HEIGHT = 160, 80

@@ -8,11 +8,12 @@ import pyray as rl
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.text_measure import measure_text_cached
+from openpilot.system.ui.lib.theme import ACCENT_BRIGHT, BORDER, DANGER, SURFACE, TEXT, WARNING, rgba
 
 
 STATUS_DURATION_SECONDS = 4.0
 PARKING_PHASES = frozenset({"scanning", "detected", "countdown", "sending", "processing", "confirm", "committing"})
-ACCENT_GREEN = rl.Color(70, 185, 122, 255)
+ACCENT_GREEN = rgba(ACCENT_BRIGHT)
 
 _last_event = ""
 _event_started = 0.0
@@ -43,13 +44,13 @@ def _current_event() -> str:
 def _event_style(event: str) -> tuple[str, str, rl.Color]:
   return {
     "found": ("Parking found", "P", ACCENT_GREEN),
-    "confirm": ("Confirm to pay", "!", rl.Color(245, 185, 66, 255)),
+    "confirm": ("Confirm to pay", "!", rgba(WARNING)),
     "paying": ("Paying…", "P", ACCENT_GREEN),
     "paid": ("Parking active", "check", ACCENT_GREEN),
     "confirmed": ("Parking confirmed", "check", ACCENT_GREEN),
-    "declined": ("Payment declined", "!", rl.Color(255, 105, 97, 255)),
-    "rejected": ("Parking unavailable", "!", rl.Color(255, 105, 97, 255)),
-    "failed": ("Parking failed", "!", rl.Color(255, 105, 97, 255)),
+    "declined": ("Payment declined", "!", rgba(DANGER)),
+    "rejected": ("Parking unavailable", "!", rgba(DANGER)),
+    "failed": ("Parking failed", "!", rgba(DANGER)),
   }[event]
 
 
@@ -94,8 +95,8 @@ def draw_parking_status(content_rect: rl.Rectangle) -> None:
   capsule_y = content_rect.y + 14.0 - 8.0 * (1.0 - entrance)
   capsule = rl.Rectangle(capsule_x, capsule_y, capsule_width, capsule_height)
 
-  rl.draw_rectangle_rounded(capsule, 0.48, 16, rl.Color(12, 14, 13, round(224 * alpha)))
-  rl.draw_rectangle_rounded_lines_ex(capsule, 0.48, 16, 1.0, rl.Color(255, 255, 255, round(34 * alpha)))
+  rl.draw_rectangle_rounded(capsule, 0.48, 16, rgba(SURFACE, round(232 * alpha)))
+  rl.draw_rectangle_rounded_lines_ex(capsule, 0.48, 16, 1.0, rgba(BORDER, round(92 * alpha)))
 
   icon_center = rl.Vector2(capsule.x + 24, capsule.y + capsule.height / 2)
   pulse = math.exp(-elapsed * 2.2) * (0.5 + 0.5 * math.sin(elapsed * 10.0))
@@ -104,7 +105,7 @@ def draw_parking_status(content_rect: rl.Rectangle) -> None:
                          rl.Color(accent.r, accent.g, accent.b, round(90 * pulse * alpha)))
   rl.draw_circle_v(icon_center, 12, rl.Color(accent.r, accent.g, accent.b, round(255 * alpha)))
 
-  symbol_color = rl.Color(255, 255, 255, round(255 * alpha))
+  symbol_color = rgba(TEXT, round(255 * alpha))
   if symbol == "check":
     rl.draw_line_ex(rl.Vector2(icon_center.x - 6, icon_center.y), rl.Vector2(icon_center.x - 2, icon_center.y + 4),
                     2.0, symbol_color)
@@ -119,10 +120,10 @@ def draw_parking_status(content_rect: rl.Rectangle) -> None:
 
   text_y = capsule.y + (capsule.height - title_size) / 2 - 3
   rl.draw_text_ex(font, title, rl.Vector2(capsule.x + 46, text_y), title_size, 0,
-                  rl.Color(255, 255, 255, round(246 * alpha)))
+                  rgba(TEXT, round(246 * alpha)))
 
   sweep = min(1.0, elapsed / 0.7)
   if sweep < 1.0:
     highlight_x = capsule.x + 8 + sweep * (capsule.width - 30)
     highlight = rl.Rectangle(highlight_x, capsule.y + 5, 22, capsule.height - 10)
-    rl.draw_rectangle_rounded(highlight, 0.8, 8, rl.Color(255, 255, 255, round(12 * alpha * (1.0 - sweep))))
+    rl.draw_rectangle_rounded(highlight, 0.8, 8, rgba(TEXT, round(12 * alpha * (1.0 - sweep))))

@@ -7,6 +7,8 @@ from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus, ChestnutState
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
+from openpilot.system.ui.lib.theme import (ACCENT, ACCENT_BRIGHT, ACCENT_SOFT, BORDER, SURFACE_RAISED,
+                                           TEXT, TEXT_MUTED, rgba)
 from openpilot.system.ui.widgets import Widget
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.cereal import log
@@ -304,16 +306,16 @@ class HudRenderer(Widget):
   def _draw_current_speed(self, rect: rl.Rectangle) -> None:
     """Draw a fixed-footprint VISION-inspired speed instrument."""
     card = rl.Rectangle(rect.x + 10, rect.y + rect.height - 84, 92, 72)
-    rl.draw_rectangle_rounded(card, 0.22, 8, rl.Color(18, 21, 26, 218))
-    rl.draw_rectangle_rounded_lines_ex(card, 0.22, 8, 1.0, rl.Color(218, 226, 238, 72))
+    rl.draw_rectangle_rounded(card, 0.22, 8, rgba(SURFACE_RAISED, 226))
+    rl.draw_rectangle_rounded_lines_ex(card, 0.22, 8, 1.0, rgba(BORDER, 86))
 
-    # Restrained optical accent inspired by the VISION series' pearlescent trim.
+    # The same green family used by home and parking status replaces the unrelated pearlescent rainbow.
     accent_y = int(card.y + 8)
     accent_x = int(card.x + 10)
     rl.draw_rectangle_gradient_h(accent_x, accent_y, 36, 2,
-                                 rl.Color(90, 224, 237, 210), rl.Color(165, 139, 255, 210))
+                                 rgba(ACCENT, 220), rgba(ACCENT_BRIGHT, 220))
     rl.draw_rectangle_gradient_h(accent_x + 36, accent_y, 36, 2,
-                                 rl.Color(165, 139, 255, 210), rl.Color(237, 142, 205, 180))
+                                 rgba(ACCENT_BRIGHT, 220), rgba(ACCENT_SOFT, 190))
 
     speed_text = str(round(self.speed))
     speed_size = FONT_SIZES.current_speed
@@ -327,9 +329,9 @@ class HudRenderer(Widget):
     # without turning it into a heavy outlined HUD element.
     rl.draw_text_ex(self._font_display, speed_text, rl.Vector2(speed_pos.x + 1, speed_pos.y + 2),
                     speed_size, 0, rl.Color(0, 0, 0, 105))
-    rl.draw_text_ex(self._font_display, speed_text, speed_pos, speed_size, 0, rl.Color(245, 247, 250, 250))
+    rl.draw_text_ex(self._font_display, speed_text, speed_pos, speed_size, 0, rgba(TEXT, 250))
 
     unit_text = (tr("km/h") if ui_state.is_metric else tr("mph")).upper()
     unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
     unit_pos = rl.Vector2(card.x + (card.width - unit_text_size.x) / 2, card.y + card.height - unit_text_size.y - 2)
-    rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, rl.Color(196, 204, 216, 205))
+    rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, rgba(TEXT_MUTED, 205))

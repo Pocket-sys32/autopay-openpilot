@@ -4,6 +4,7 @@ from enum import IntEnum
 import pyray as rl
 
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, TextAlignment
+from openpilot.system.ui.lib.theme import ACCENT, ACCENT_BRIGHT, rgba
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.label import Label
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -47,7 +48,7 @@ BUTTON_DISABLED_TEXT_COLORS = {
 
 BUTTON_BACKGROUND_COLORS = {
   ButtonStyle.NORMAL: rl.Color(51, 51, 51, 255),
-  ButtonStyle.PRIMARY: rl.Color(70, 91, 234, 255),
+  ButtonStyle.PRIMARY: rgba(ACCENT),
   ButtonStyle.DANGER: rl.Color(226, 44, 44, 255),
   ButtonStyle.TRANSPARENT: rl.BLACK,
   ButtonStyle.TRANSPARENT_WHITE_TEXT: rl.BLANK,
@@ -61,7 +62,7 @@ BUTTON_BACKGROUND_COLORS = {
 
 BUTTON_PRESSED_BACKGROUND_COLORS = {
   ButtonStyle.NORMAL: rl.Color(74, 74, 74, 255),
-  ButtonStyle.PRIMARY: rl.Color(48, 73, 244, 255),
+  ButtonStyle.PRIMARY: rgba(ACCENT_BRIGHT),
   ButtonStyle.DANGER: rl.Color(255, 36, 36, 255),
   ButtonStyle.TRANSPARENT: rl.BLACK,
   ButtonStyle.TRANSPARENT_WHITE_TEXT: rl.BLANK,
