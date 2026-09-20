@@ -33,7 +33,7 @@ from openpilot.selfdrive.parking.qr_detector import CandidateConsensus, QRScan, 
 
 
 CANDIDATE_TTL_NS = 30_000_000_000
-COUNTDOWN_NS = 5_000_000_000
+COUNTDOWN_NS = 3_000_000_000
 ROLLING_SUBMIT_MPS = 0.894  # 2 mph
 G82_SCAN_SPEED_MPS = 5 * 0.44704  # Begin QR scanning below 5 mph.
 G82_PARKED_SPEED_MPS = 0.5 * 0.44704  # Dispatch only after a near-stop.

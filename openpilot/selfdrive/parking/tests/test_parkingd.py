@@ -323,8 +323,11 @@ class TestParkingDaemonEvidence(OpenpilotTestCase):
       daemon.intent_config = IntentConfig(IntentProfile.GPS_DEMO,
                                           stationary_speed_mps=G82_PARKED_SPEED_MPS,
                                           stationary_debounce_ns=0)
+      countdown_started_ns = time.monotonic_ns()
       daemon.step()
       self.assertIsNotNone(daemon.countdown_deadline_ns)
+      self.assertGreaterEqual(daemon.countdown_deadline_ns, countdown_started_ns + 3_000_000_000)
+      self.assertLessEqual(daemon.countdown_deadline_ns, time.monotonic_ns() + 3_000_000_000)
       daemon.countdown_deadline_ns = 0
       daemon.step()
       self.assertIsNotNone(daemon._request)
