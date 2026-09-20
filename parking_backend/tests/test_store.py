@@ -39,6 +39,16 @@ class TestParkingStore(unittest.TestCase):
     self.assertFalse(created_again)
     self.assertEqual(first["attempt_id"], second["attempt_id"])
 
+  def test_only_the_google_form_is_reported_as_a_demo(self):
+    demo, _ = self.store.put_attempt("comma", request(), now_ms=1_000)
+    self.assertTrue(demo["demo"])
+    self.store.transition("attempt-1", "preparing", "AUTOMATION_PREPARING")
+    row = self.store.connection.execute("SELECT payload_json FROM attempt").fetchone()
+    laz = self.store._public({**dict(row), "payload_json": row["payload_json"].replace("demo_google_form", "laz_ttp"),
+                               "attempt_id": "x", "episode_id": "y", "state": "accepted", "reason_code": "",
+                               "updated_ms": 0, "result_version": 1, "email_status": "pending", "result_json": None})
+    self.assertFalse(laz["demo"])
+
   def test_changed_duplicate_and_second_episode_attempt_conflict(self):
     self.store.put_attempt("comma", request(), now_ms=1_000)
     changed = request()

@@ -27,6 +27,19 @@ class Settings:
   test_card_cvv: str
   test_card_expiration: str
   test_zip_code: str
+  laz_enabled: bool
+  laz_card_number: str
+  laz_card_cvv: str
+  laz_card_expiration: str
+  flaresolverr_url: str | None
+  # Appended with defaults: tests/test_worker.py and any other caller may construct Settings positionally.
+  agent_enabled: bool = False
+  agent_prepare_timeout_s: int = 180
+  agent_confirm_timeout_s: int = 150
+  agent_commit_timeout_s: int = 90
+  agent_keepalive_s: int = 20
+  agent_max_total_minor: int = 3000
+  agent_dry_run: bool = False
 
   @classmethod
   def from_environment(cls) -> Settings:
@@ -44,5 +57,19 @@ class Settings:
       test_card_cvv=os.getenv("PARKING_TEST_CARD_CVV", "123"),
       test_card_expiration=os.getenv("PARKING_TEST_CARD_EXPIRATION", "12/30"),
       test_zip_code=os.getenv("PARKING_TEST_ZIP_CODE", "95616"),
+      # Real payments stay off unless the VM operator opts in explicitly.
+      laz_enabled=os.getenv("PARKING_LAZ_ENABLED", "0") == "1",
+      laz_card_number=os.getenv("PARKING_LAZ_CARD_NUMBER", ""),
+      laz_card_cvv=os.getenv("PARKING_LAZ_CARD_CVV", ""),
+      laz_card_expiration=os.getenv("PARKING_LAZ_CARD_EXPIRATION", ""),
+      flaresolverr_url=os.getenv("FLARESOLVERR_URL"),
+      agent_enabled=os.getenv("PARKING_AGENT_ENABLED", "0") == "1",
+      agent_prepare_timeout_s=int(os.getenv("PARKING_AGENT_PREPARE_TIMEOUT_S", "180")),
+      agent_confirm_timeout_s=int(os.getenv("PARKING_AGENT_CONFIRM_TIMEOUT_S", "150")),
+      agent_commit_timeout_s=int(os.getenv("PARKING_AGENT_COMMIT_TIMEOUT_S", "90")),
+      agent_keepalive_s=int(os.getenv("PARKING_AGENT_KEEPALIVE_S", "20")),
+      agent_max_total_minor=int(os.getenv("PARKING_AGENT_MAX_TOTAL_MINOR", "3000")),
+      # Stops before the pay click; how a real merchant is exercised without buying anything.
+      agent_dry_run=os.getenv("PARKING_AGENT_DRY_RUN", "0") == "1",
     )
 
