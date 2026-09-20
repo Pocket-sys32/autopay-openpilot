@@ -177,6 +177,7 @@ PARKING_AGENT_MAX_TOTAL_MINOR=3000     # hard ceiling in minor units
 PARKING_AGENT_DRY_RUN=0                # 1 reaches the checkout and stops before paying
 PARKING_AGENT_MODEL=gemini-2.5-flash
 PARKING_AGENT_LOCATION=us-west1
+PARKING_AGENT_DIAG_DIR=/var/lib/parking-demo/agent-diag
 PARKING_AGENT_CARD_NUMBER=...          # secrets; keep these in Secret Manager
 PARKING_AGENT_CARD_CVV=...
 PARKING_AGENT_CARD_EXPIRY_MONTH=...
@@ -192,6 +193,10 @@ PARKING_AGENT_WARMUP_URLS=             # empty string turns warming off
 
 Run it with `PARKING_AGENT_DRY_RUN=1` against a real provider first. That exercises the whole path, including
 the confirmation prompt on the comma, and stops before spending anything.
+
+Each run writes bounded mode-0600 JSON metadata to `PARKING_AGENT_DIAG_DIR`: action names, phase, latency,
+screenshot usage, and Vertex token counts when the API reports them. Diagnostics retain at most 50 files and
+never contain DOM text, prompts, model replies, screenshots, profile values, or card values.
 
 The model runs on Vertex AI as the VM's own service account, so there is no API key. `aiplatform.googleapis.com`
 is already enabled on the project, but the service account needs the role granted once:

@@ -47,6 +47,7 @@ class Settings:
   agent_card_expiry_month: str = ""
   agent_card_expiry_year: str = ""
   agent_card_zip: str = ""
+  agent_diag_dir: Path = Path("/var/lib/parking-demo/agent-diag")
 
   @classmethod
   def from_environment(cls) -> Settings:
@@ -86,5 +87,5 @@ class Settings:
       agent_card_expiry_month=os.getenv("PARKING_AGENT_CARD_EXPIRY_MONTH", ""),
       agent_card_expiry_year=os.getenv("PARKING_AGENT_CARD_EXPIRY_YEAR", ""),
       agent_card_zip=os.getenv("PARKING_AGENT_CARD_ZIP", ""),
+      agent_diag_dir=Path(os.getenv("PARKING_AGENT_DIAG_DIR", "/var/lib/parking-demo/agent-diag")),
     )
-

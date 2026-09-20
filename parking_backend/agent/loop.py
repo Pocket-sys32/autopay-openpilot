@@ -10,7 +10,7 @@ import time
 from urllib.parse import urlsplit
 
 from parking_backend.agent.actions import Action, MalformedAction, parse_action
-from parking_backend.agent.llm import LLMClient
+from parking_backend.agent.llm import LLMClient, ModelTelemetry
 from parking_backend.agent.profile import AgentProfile
 from parking_backend.agent.prompt import build_messages
 from parking_backend.agent.secrets import SecretVault
@@ -46,6 +46,9 @@ class AgentLoop:
     self.vault = vault
     self.validator = validator or ActionValidator(policy, vault)
     self._step = 0
+    self._last_screenshot_hash = ""
+    self._last_model = ModelTelemetry()
+    self._last_screenshot_sent = False
 
   # -- the loop ------------------------------------------------------------------------------------
 
@@ -105,17 +108,34 @@ class AgentLoop:
 
   def _decide(self, observation: Observation, phase: AgentPhase) -> Action:
     system, user = build_messages(observation, phase, self.profile, self.vault)
+    send_screenshot = phase is AgentPhase.COMMITTING or observation.screen_hash != self._last_screenshot_hash
+    screenshot = observation.screenshot_jpeg if send_screenshot else None
+    if send_screenshot:
+      self._last_screenshot_hash = observation.screen_hash
     last: Exception | None = None
+    aggregate = ModelTelemetry()
     for attempt in range(MAX_REPARSE_ATTEMPTS + 1):
       nudge = user if attempt == 0 else f"{user}\n\nYour last reply was rejected: {last}. Reply with one JSON object only."
-      raw = self.llm.propose(system=system, user=nudge, screenshot_jpeg=observation.screenshot_jpeg)
+      started = time.monotonic_ns()
+      raw = self.llm.propose(system=system, user=nudge, screenshot_jpeg=screenshot)
+      reported = getattr(self.llm, "last_telemetry", ModelTelemetry())
+      elapsed_ms = reported.elapsed_ms or (time.monotonic_ns() - started) // 1_000_000
+      aggregate = ModelTelemetry(
+        elapsed_ms=aggregate.elapsed_ms + elapsed_ms,
+        prompt_tokens=aggregate.prompt_tokens + reported.prompt_tokens,
+        candidate_tokens=aggregate.candidate_tokens + reported.candidate_tokens,
+        total_tokens=aggregate.total_tokens + reported.total_tokens,
+      )
       try:
         action = parse_action(raw)
       except MalformedAction as exc:
         last = exc
         continue
       try:
-        return self.validator.check(action, observation, phase)
+        accepted = self.validator.check(action, observation, phase)
+        self._last_model = aggregate
+        self._last_screenshot_sent = screenshot is not None
+        return accepted
       except StaleNode as exc:
         # A stale nid means the page moved under it; re-observing is the fix, not a retry of the same click.
         last = exc
@@ -150,8 +170,15 @@ class AgentLoop:
 
   def _log(self, phase: AgentPhase, action: Action, detail: str, *, elapsed_ms: int = 0) -> None:
     # FILL_SECRET is recorded by slot name only; the value never reaches the transcript.
-    self.policy.transcript.append(StepLog(self._step, phase.value, action.describe(), detail,
-                                          elapsed_ms=elapsed_ms))
+    model = self._last_model
+    self.policy.transcript.append(StepLog(
+      self._step, phase.value, action.describe(), detail, elapsed_ms=elapsed_ms,
+      model_ms=model.elapsed_ms, prompt_tokens=model.prompt_tokens,
+      candidate_tokens=model.candidate_tokens, total_tokens=model.total_tokens,
+      screenshot_sent=self._last_screenshot_sent,
+    ))
+    self._last_model = ModelTelemetry()
+    self._last_screenshot_sent = False
 
 
 def quote_pay_nid(observation: Observation, quote: FrozenQuote) -> str:

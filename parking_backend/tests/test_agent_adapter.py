@@ -9,7 +9,7 @@ import time
 import unittest
 
 from parking_backend.agent.adapter import GenericAgentAdapter
-from parking_backend.agent.llm import ScriptedLLM
+from parking_backend.agent.llm import LLMUnavailable, ScriptedLLM
 from parking_backend.agent.secrets import SecretVault
 from parking_backend.store import ParkingStore
 from parking_backend.tests.fake_browser import FakeBrowser
@@ -81,7 +81,7 @@ class TestAgentThroughWorker(unittest.TestCase):
     self.store.record_decision("comma", "attempt-1", "confirm", quote_hash)
     worker.process_once()
     row = self.row()
-    self.assertEqual((row["state"], row["reason_code"]), ("succeeded", "DEMO_FORM_CONFIRMED"))
+    self.assertEqual((row["state"], row["reason_code"]), ("succeeded", "AGENT_PAID"))
     self.assertFalse(row["demo"])  # real money must never be reported as a demo
     self.assertIn(("n1", "4242424242424242"), self.browser.typed)
     self.assertIsNone(worker.held)
@@ -104,7 +104,20 @@ class TestAgentThroughWorker(unittest.TestCase):
     worker.process_once()
     row = self.row()
     self.assertEqual(row["state"], "action_required")
-    self.assertEqual(row["reason_code"], "FORM_CHANGED")
+    self.assertEqual(row["reason_code"], "PRICE_LIMIT_EXCEEDED")
+
+  def test_a_model_outage_has_a_precise_non_payment_outcome(self):
+    class UnavailableLLM:
+      def propose(self, **_kwargs):
+        raise LLMUnavailable("vertex unavailable")
+
+    self.store.put_attempt("comma", attempt(self.now_ms), now_ms=self.now_ms)
+    adapter = GenericAgentAdapter(llm=UnavailableLLM(), vault=VAULT,
+                                  browser_factory=lambda: self.browser)
+    Worker(self.settings, self.store, {"generic_agent": adapter}, FakeEmail()).process_once()
+    row = self.row()
+    self.assertEqual((row["state"], row["reason_code"]), ("action_required", "LLM_UNAVAILABLE"))
+    self.assertNotIn("n3", self.browser.tapped)
 
   def test_dry_run_reaches_the_checkout_but_never_pays(self):
     self.store.put_attempt("comma", attempt(self.now_ms), now_ms=self.now_ms)

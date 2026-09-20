@@ -12,7 +12,7 @@ from parking_backend.agent.price import PriceUnreadable, parse_total_minor
 from parking_backend.agent.secrets import SecretVault, guarded_literals
 from parking_backend.agent.types import (AgentPhase, AgentPolicy, AgentStuck, FrozenQuote, InvariantDrift,
                                          Observation, OffDomain, StaleNode, UserInterventionRequired)
-from parking_backend.laz_adapter import PriceLimitExceeded
+from parking_backend.errors import PriceLimitExceeded
 
 
 # What each phase may do. NAVIGATING can look for a checkout but not pay; COMMITTING can pay but not wander.
@@ -61,6 +61,8 @@ class ActionValidator:
 
   def observe(self, observation: Observation, phase: AgentPhase) -> None:
     """Count the step and notice when the loop has stopped getting anywhere."""
+    if "captcha_present" in observation.hints:
+      raise UserInterventionRequired("CAPTCHA", "a human-verification challenge is blocking the checkout")
     self.steps += 1
     budget = self.policy.max_steps_commit if phase is AgentPhase.COMMITTING else self.policy.max_steps_navigate
     if self.steps > budget:

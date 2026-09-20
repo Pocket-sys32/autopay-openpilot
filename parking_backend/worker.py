@@ -9,8 +9,10 @@ from typing import Protocol, cast
 
 from parking_backend.appium_adapter import AndroidFormAdapter, FormChanged, SubmissionUnknown
 from parking_backend.config import Settings
-from parking_backend.agent.types import DryRunStop, UserInterventionRequired
-from parking_backend.errors import CaptchaChallenged, PaymentDeclined, ReservationRejected
+from parking_backend.agent.llm import LLMUnavailable
+from parking_backend.agent.types import (AgentStuck, DryRunStop, InvariantDrift, OffDomain,
+                                         UserInterventionRequired)
+from parking_backend.errors import CaptchaChallenged, PaymentDeclined, PriceLimitExceeded, ReservationRejected
 from parking_backend.gmail import EmailDeliveryUnknown, GmailSender
 from parking_backend.provider import ConfirmingAdapter, ProviderAdapter
 from parking_backend.store import LAZ_PROVIDER_ID, ParkingStore
@@ -18,6 +20,10 @@ from parking_backend.store import LAZ_PROVIDER_ID, ParkingStore
 
 class AutomationTimeout(TimeoutError):
   pass
+
+
+def intervention_reason(code: str) -> str:
+  return "CAPTCHA_BLOCKED" if code == "CAPTCHA" else code
 
 
 class ResultEmailSender(Protocol):
@@ -76,7 +82,8 @@ class Worker:
       except Exception as exc:
         self._release_after_commit_failure(held, exc)
         return True
-      self._release(held, "succeeded", "AGENT_PAID" if held.is_laz else "DEMO_FORM_CONFIRMED", result)
+      paid_reason = "AGENT_PAID" if held.is_laz or held.request.get("provider_id") == "generic_agent" else "DEMO_FORM_CONFIRMED"
+      self._release(held, "succeeded", paid_reason, result)
       return True
 
     if state != "confirmation_required":
@@ -132,7 +139,18 @@ class Worker:
       self._release(held, "action_required", "DRY_RUN",
                     {"demo": False, "message": "Dry run: the checkout was reached and nothing was purchased."})
     elif isinstance(exc, UserInterventionRequired):
-      self._release(held, "action_required", exc.code, {"demo": False, "message": str(exc)})
+      self._release(held, "action_required", intervention_reason(exc.code), {"demo": False, "message": str(exc)})
+    elif isinstance(exc, LLMUnavailable):
+      self._release(held, "action_required", "LLM_UNAVAILABLE", {"demo": False, "message": str(exc)})
+    elif isinstance(exc, PriceLimitExceeded):
+      self._release(held, "action_required", "PRICE_LIMIT_EXCEEDED", {"demo": False, "message": str(exc)})
+    elif isinstance(exc, OffDomain):
+      self._release(held, "action_required", "OFF_DOMAIN", {"demo": False, "message": str(exc)})
+    elif isinstance(exc, AgentStuck):
+      reason = "AGENT_STEP_BUDGET_EXHAUSTED" if "step budget" in str(exc) else "AGENT_STUCK"
+      self._release(held, "action_required", reason, {"demo": False, "message": str(exc)})
+    elif isinstance(exc, InvariantDrift):
+      self._release(held, "action_required", "INVARIANT_DRIFT", {"demo": False, "message": str(exc)})
     elif isinstance(exc, FormChanged):
       self._release(held, "action_required", "INVARIANT_DRIFT", {"demo": False, "message": str(exc)})
     else:
@@ -188,8 +206,22 @@ class Worker:
       # Raised before PAY: nothing was purchased and a person can clear the challenge.
       self.store.complete(attempt_id, "action_required", "CAPTCHA_CHALLENGED",
                           {"demo": False, "message": "reCAPTCHA challenged the checkout. Nothing was purchased."})
+    except UserInterventionRequired as exc:
+      self.store.complete(attempt_id, "action_required", intervention_reason(exc.code),
+                          {"demo": False, "message": str(exc)})
+    except LLMUnavailable as exc:
+      self.store.complete(attempt_id, "action_required", "LLM_UNAVAILABLE", {"demo": False, "message": str(exc)})
+    except PriceLimitExceeded as exc:
+      self.store.complete(attempt_id, "action_required", "PRICE_LIMIT_EXCEEDED", {"demo": False, "message": str(exc)})
+    except OffDomain as exc:
+      self.store.complete(attempt_id, "action_required", "OFF_DOMAIN", {"demo": False, "message": str(exc)})
+    except AgentStuck as exc:
+      reason = "AGENT_STEP_BUDGET_EXHAUSTED" if "step budget" in str(exc) else "AGENT_STUCK"
+      self.store.complete(attempt_id, "action_required", reason, {"demo": False, "message": str(exc)})
+    except InvariantDrift as exc:
+      self.store.complete(attempt_id, "action_required", "INVARIANT_DRIFT", {"demo": False, "message": str(exc)})
     except FormChanged as exc:
-      self.store.complete(attempt_id, "action_required", "FORM_CHANGED", {"demo": True, "message": str(exc)})
+      self.store.complete(attempt_id, "action_required", "FORM_CHANGED", {"demo": provider_id == "demo_google_form", "message": str(exc)})
     except SubmissionUnknown as exc:
       self.store.complete(attempt_id, "unknown", "FORM_RESULT_UNKNOWN", {"demo": True, "message": str(exc)})
     except Exception as exc:
@@ -247,6 +279,7 @@ def main() -> None:
     )
   if settings.agent_enabled:
     from parking_backend.agent.adapter import GENERIC_PROVIDER_ID, GenericAgentAdapter
+    from parking_backend.agent.diag import DiagnosticWriter
     from parking_backend.agent.driver import DriverSession
     from parking_backend.agent.llm import VertexGeminiClient
     from parking_backend.agent.secrets import SecretVault
@@ -261,6 +294,7 @@ def main() -> None:
       browser_factory=lambda: DriverSession(settings.appium_url, vault=vault),
       max_total_minor=settings.agent_max_total_minor,
       dry_run=settings.agent_dry_run,
+      diagnostics=DiagnosticWriter(settings.agent_diag_dir, vault=vault),
     )
   worker = Worker(
     settings,

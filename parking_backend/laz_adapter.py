@@ -9,7 +9,7 @@ import time
 import requests
 
 from parking_backend.appium_adapter import CHROMEDRIVER_PATH, FormChanged, SubmissionUnknown
-from parking_backend.errors import CaptchaChallenged, PaymentDeclined, ReservationRejected
+from parking_backend.errors import CaptchaChallenged, PaymentDeclined, PriceLimitExceeded, ReservationRejected
 
 
 LOCATION_ID = "143245"
@@ -46,10 +46,6 @@ return [...document.querySelectorAll('iframe')].some(f => {
   return true;
 });
 """
-
-
-class PriceLimitExceeded(FormChanged):
-  pass
 
 
 @dataclass(frozen=True, slots=True)

@@ -30,6 +30,11 @@ class TestPhaseGating(unittest.TestCase):
       validator().check(parse_action({"action": "FILL_SECRET", "slot": "card_number"}),
                         observation(), AgentPhase.NAVIGATING)
 
+  def test_a_detected_captcha_stops_before_the_model_is_asked_to_solve_it(self):
+    with self.assertRaises(UserInterventionRequired) as caught:
+      validator().observe(observation(hints=("captcha_present",)), AgentPhase.NAVIGATING)
+    self.assertEqual(caught.exception.code, "CAPTCHA")
+
   def test_navigation_is_unreachable_after_confirmation(self):
     for action in ({"action": "OPEN_URL", "url": "https://parking.example.com/other"}, {"action": "BACK"}):
       with self.subTest(action=action["action"]), self.assertRaises(InvariantDrift):

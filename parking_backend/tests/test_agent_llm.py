@@ -24,10 +24,11 @@ class FakeResponse:
 
 
 class FakeSession:
-  def __init__(self, *, answer="{}", post_response=None):
+  def __init__(self, *, answer="{}", post_response=None, usage=None):
     self.answer = answer
     self.posts = []
     self.post_response = post_response
+    self.usage = usage
 
   def get(self, url, headers=None, timeout=None):
     if url.endswith("/token"):
@@ -38,7 +39,8 @@ class FakeSession:
     self.posts.append({"url": url, "body": json, "headers": headers})
     if self.post_response is not None:
       return self.post_response
-    return FakeResponse({"candidates": [{"content": {"parts": [{"text": self.answer}]}}]})
+    return FakeResponse({"candidates": [{"content": {"parts": [{"text": self.answer}]}}],
+                         "usageMetadata": self.usage or {}})
 
 
 class TestVertexClient(unittest.TestCase):
@@ -76,6 +78,15 @@ class TestVertexClient(unittest.TestCase):
     session = FakeSession()
     self.client(session).propose(system="sys", user="obs", screenshot_jpeg=None)
     self.assertEqual(len(session.posts[0]["body"]["contents"][0]["parts"]), 1)
+
+  def test_usage_metadata_is_retained_for_the_step_log(self):
+    session = FakeSession(usage={"promptTokenCount": 120, "candidatesTokenCount": 18,
+                                 "totalTokenCount": 138})
+    client = self.client(session)
+    client.propose(system="sys", user="obs", screenshot_jpeg=None)
+    self.assertEqual((client.last_telemetry.prompt_tokens, client.last_telemetry.candidate_tokens,
+                      client.last_telemetry.total_tokens), (120, 18, 138))
+    self.assertGreaterEqual(client.last_telemetry.elapsed_ms, 0)
 
   def test_the_token_is_reused_rather_than_refetched(self):
     session = FakeSession()

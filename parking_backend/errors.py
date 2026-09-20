@@ -14,3 +14,7 @@ class ReservationRejected(RuntimeError):
 class CaptchaChallenged(FormChanged):
   """reCAPTCHA put a challenge on screen. A person has to clear it, so this is action_required, like any other
   FormChanged; raising it before PAY is clicked keeps it a state in which nothing was purchased."""
+
+
+class PriceLimitExceeded(FormChanged):
+  """The live checkout total is above an independently configured spending ceiling."""

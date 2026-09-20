@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from parking_backend.agent.llm import LLMClient
+from parking_backend.agent.diag import DiagnosticWriter
 from parking_backend.agent.loop import AgentLoop, Browser
 from parking_backend.agent.profile import AgentProfile
 from parking_backend.agent.secrets import SecretVault
@@ -22,6 +23,7 @@ class AgentSession:
   browser: Browser
   quote: FrozenQuote
   near: str
+  attempt_id: str
 
 
 class GenericAgentAdapter:
@@ -31,12 +33,14 @@ class GenericAgentAdapter:
   supports_confirmation = True
 
   def __init__(self, *, llm: LLMClient, vault: SecretVault, browser_factory: Callable[[], Browser],
-               max_total_minor: int = 3000, dry_run: bool = False):
+               max_total_minor: int = 3000, dry_run: bool = False,
+               diagnostics: DiagnosticWriter | None = None):
     self.llm = llm
     self.vault = vault
     self.browser_factory = browser_factory
     self.max_total_minor = max_total_minor
     self.dry_run = dry_run
+    self.diagnostics = diagnostics
 
   def validate_location(self, location_id: str) -> bool:
     """location_id is the QR URL's host; the device already checked its shape, this is our own pass."""
@@ -64,15 +68,24 @@ class GenericAgentAdapter:
                      vault=self.vault)
     try:
       summary, quote, near = loop.navigate(url)
-    except BaseException:
+    except BaseException as exc:
+      self._write_diag(str(request.get("attempt_id") or "attempt"), "prepare_failed", policy.transcript,
+                       type(exc).__name__)
       self._close(browser)
       raise
-    return summary, AgentSession(loop, browser, quote, near)
+    attempt_id = str(request.get("attempt_id") or "attempt")
+    self._write_diag(attempt_id, "checkout_ready", policy.transcript)
+    return summary, AgentSession(loop, browser, quote, near, attempt_id)
 
   def commit(self, request: dict[str, object], session: AgentSession, *,
              mark_submitting: Callable[[], None]) -> dict[str, object]:
     try:
-      return session.loop.commit(session.quote, near=session.near, mark_submitting=mark_submitting)
+      result = session.loop.commit(session.quote, near=session.near, mark_submitting=mark_submitting)
+      self._write_diag(session.attempt_id, "commit_complete", session.loop.policy.transcript, "succeeded")
+      return result
+    except BaseException as exc:
+      self._write_diag(session.attempt_id, "commit_failed", session.loop.policy.transcript, type(exc).__name__)
+      raise
     finally:
       self._close(session.browser)
 
@@ -82,7 +95,12 @@ class GenericAgentAdapter:
       keepalive()
 
   def abandon(self, session: AgentSession, reason: str) -> None:
+    self._write_diag(session.attempt_id, "abandoned", session.loop.policy.transcript, reason)
     self._close(session.browser)
+
+  def _write_diag(self, attempt_id: str, stage: str, transcript, outcome: str = "") -> None:
+    if self.diagnostics is not None:
+      self.diagnostics.write(attempt_id, stage, transcript, outcome=outcome)
 
   @staticmethod
   def _close(browser: Browser) -> None:

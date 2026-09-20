@@ -6,6 +6,7 @@ emulator, no spend.
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 import json
 import os
 from typing import Protocol
@@ -30,6 +31,14 @@ class LLMUnavailable(RuntimeError):
   """The model could not be reached or did not answer."""
 
 
+@dataclass(frozen=True, slots=True)
+class ModelTelemetry:
+  elapsed_ms: int = 0
+  prompt_tokens: int = 0
+  candidate_tokens: int = 0
+  total_tokens: int = 0
+
+
 class VertexGeminiClient:
   """Gemini through Vertex AI, authenticated as the VM's own service account.
 
@@ -45,6 +54,7 @@ class VertexGeminiClient:
     self.session = session or requests.Session()
     self._token = ""
     self._token_expires = 0.0
+    self.last_telemetry = ModelTelemetry()
 
   def _metadata(self, url: str) -> dict | str:
     response = self.session.get(url, headers=METADATA_HEADERS, timeout=5)
@@ -74,6 +84,8 @@ class VertexGeminiClient:
     return self.project
 
   def propose(self, *, system: str, user: str, screenshot_jpeg: bytes | None) -> str:
+    import time as _time
+    started = _time.monotonic_ns()
     project, token = self._project_id(), self._access_token()
     host = f"https://{self.location}-aiplatform.googleapis.com/v1"
     endpoint = f"{host}/projects/{project}/locations/{self.location}/publishers/google/models/{self.model}:generateContent"
@@ -94,6 +106,13 @@ class VertexGeminiClient:
       payload = response.json()
     except (requests.RequestException, ValueError) as exc:
       raise LLMUnavailable(f"vertex request failed: {type(exc).__name__}") from exc
+    usage = payload.get("usageMetadata") or {}
+    self.last_telemetry = ModelTelemetry(
+      elapsed_ms=(_time.monotonic_ns() - started) // 1_000_000,
+      prompt_tokens=int(usage.get("promptTokenCount") or 0),
+      candidate_tokens=int(usage.get("candidatesTokenCount") or 0),
+      total_tokens=int(usage.get("totalTokenCount") or 0),
+    )
     try:
       return payload["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError, TypeError) as exc:
@@ -109,6 +128,7 @@ class ScriptedLLM:
     self.responses = list(responses)
     self.prompts: list[tuple[str, str]] = []
     self.screenshots: list[bytes | None] = []
+    self.last_telemetry = ModelTelemetry()
 
   def propose(self, *, system: str, user: str, screenshot_jpeg: bytes | None) -> str:
     self.prompts.append((system, user))

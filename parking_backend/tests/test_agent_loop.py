@@ -65,6 +65,25 @@ class TestNavigation(unittest.TestCase):
     self.assertEqual(browser.tapped, ["n1"])
     self.assertEqual(browser.selected, [("n2", "3 hours")])
 
+  def test_an_unchanged_navigation_screen_is_not_resent_as_an_image(self):
+    agent, _ = loop([
+      {"action": "WAIT", "seconds": 1},
+      {"action": "WAIT", "seconds": 1},
+      {"action": "REQUEST_USER", "code": "AMBIGUOUS", "message": "still here"},
+    ], pol=policy(max_same_screen=5))
+    with self.assertRaises(UserInterventionRequired):
+      agent.navigate(START)
+    self.assertEqual(agent.llm.screenshots, [b"jpeg", None, None])
+
+  def test_step_logs_include_model_and_screenshot_telemetry(self):
+    agent, _ = loop(TO_CHECKOUT)
+    agent.navigate(START)
+    self.assertEqual(len(agent.policy.transcript), 4)
+    self.assertTrue(agent.policy.transcript[0].screenshot_sent)
+    self.assertTrue(agent.policy.transcript[1].screenshot_sent)  # tapping moved to the checkout
+    self.assertFalse(agent.policy.transcript[2].screenshot_sent)  # same checkout shape is not resent
+    self.assertGreaterEqual(agent.policy.transcript[0].model_ms, 0)
+
   def test_the_model_names_a_field_and_the_profile_supplies_the_value(self):
     agent, browser = loop(TO_CHECKOUT)
     agent.navigate(START)

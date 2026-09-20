@@ -117,6 +117,11 @@ class StepLog:
   detail: str = ""
   outcome: str = "ok"
   elapsed_ms: int = 0
+  model_ms: int = 0
+  prompt_tokens: int = 0
+  candidate_tokens: int = 0
+  total_tokens: int = 0
+  screenshot_sent: bool = False
 
 
 @dataclass
