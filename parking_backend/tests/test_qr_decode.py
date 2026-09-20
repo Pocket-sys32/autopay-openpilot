@@ -3,14 +3,15 @@ import unittest
 import cv2
 import numpy as np
 
-from openpilot.common.qrcode import _Qr
 from parking_backend.qr_decode import InvalidSnapshot, decode_jpeg
 
 
-def qr_jpeg(payload: str, version: int = 1) -> bytes:
-  code = _Qr(version, payload.encode())
-  modules = np.pad(np.asarray(code.modules), 4)
-  gray = np.repeat(np.repeat((~modules).astype(np.uint8) * 255, 12, axis=0), 12, axis=1)
+def qr_modules(payload: str) -> np.ndarray:
+  return cv2.QRCodeEncoder_create().encode(payload)
+
+
+def qr_jpeg(payload: str) -> bytes:
+  gray = np.repeat(np.repeat(qr_modules(payload), 12, axis=0), 12, axis=1)
   ok, output = cv2.imencode(".jpg", gray, (cv2.IMWRITE_JPEG_QUALITY, 80))
   if not ok:
     raise AssertionError("OpenCV could not build the QR test fixture")
@@ -28,9 +29,8 @@ class TestQrDecode(unittest.TestCase):
       for inverted in (False, True):
         symbols = []
         for payload in ("bay-one", "bay-two"):
-          modules = np.pad(np.asarray(_Qr(1, payload.encode()).modules), 4)
-          symbols.append(np.repeat(np.repeat((~modules).astype(np.uint8) * 255,
-                                            module_size, axis=0), module_size, axis=1))
+          modules = qr_modules(payload)
+          symbols.append(np.repeat(np.repeat(modules, module_size, axis=0), module_size, axis=1))
         if inverted:
           symbols[1] = 255 - symbols[1]
         frame = np.concatenate(symbols, axis=1)
@@ -42,14 +42,15 @@ class TestQrDecode(unittest.TestCase):
     with self.assertRaises(InvalidSnapshot):
       decode_jpeg(b"not a jpeg")
 
-  def test_decoder_assertion_from_malformed_qr_fails_closed(self):
-    # A payload too large for a version-1 symbol produces invalid codewords.
-    # OpenCV may assert internally, but the API-facing decoder must not raise.
-    payloads, _processing_ms = decode_jpeg(qr_jpeg("https://forms.gle/unuK7YLW6VzyoQ4J6"))
+  def test_qr_like_noise_fails_closed(self):
+    noise = np.random.default_rng(1).choice((0, 255), size=(256, 256)).astype(np.uint8)
+    ok, encoded = cv2.imencode(".jpg", noise)
+    self.assertTrue(ok)
+    payloads, _processing_ms = decode_jpeg(encoded.tobytes())
     self.assertEqual(payloads, [])
 
   def test_decodes_allowlisted_short_url(self):
-    payloads, _processing_ms = decode_jpeg(qr_jpeg("https://forms.gle/unuK7YLW6VzyoQ4J6", version=3))
+    payloads, _processing_ms = decode_jpeg(qr_jpeg("https://forms.gle/unuK7YLW6VzyoQ4J6"))
     self.assertEqual(payloads, ["https://forms.gle/unuK7YLW6VzyoQ4J6"])
 
 
