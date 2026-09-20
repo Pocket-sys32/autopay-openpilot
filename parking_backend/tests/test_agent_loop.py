@@ -5,11 +5,10 @@ from parking_backend.agent.llm import ScriptedLLM
 from parking_backend.agent.loop import AgentLoop
 from parking_backend.agent.profile import AgentProfile
 from parking_backend.agent.secrets import SecretVault
-from parking_backend.agent.types import (AgentPolicy, AgentStuck, DryRunStop, InvariantDrift, OffDomain,
-                                         UserInterventionRequired)
+from parking_backend.agent.types import (AgentPolicy, AgentStuck, DryRunStop, InvariantDrift, Node, OffDomain,
+                                         StaleNode, UserInterventionRequired)
 from parking_backend.laz_adapter import PriceLimitExceeded
 from parking_backend.tests.fake_browser import FakeBrowser, Page
-from parking_backend.agent.types import Node
 
 
 START = "https://parking.example.com/session/ABC123"
@@ -64,6 +63,24 @@ class TestNavigation(unittest.TestCase):
     self.assertIn("14.50", near)
     self.assertEqual(browser.tapped, ["n1"])
     self.assertEqual(browser.selected, [("n2", "3 hours")])
+
+  def test_a_node_that_disappears_between_observation_and_click_is_reobserved(self):
+    class RerenderingBrowser(FakeBrowser):
+      def __init__(self):
+        super().__init__(pages(), START)
+        self.rerendered = False
+
+      def tap(self, nid):
+        if not self.rerendered:
+          self.rerendered = True
+          raise StaleNode("page rerendered")
+        super().tap(nid)
+
+    responses = [TO_CHECKOUT[0], *TO_CHECKOUT]
+    agent, browser = loop(responses, browser=RerenderingBrowser(), pol=policy(max_same_screen=5))
+    summary, _quote, _near = agent.navigate(START)
+    self.assertTrue(browser.rerendered)
+    self.assertEqual(summary.total_minor, 1450)
 
   def test_an_unchanged_navigation_screen_is_not_resent_as_an_image(self):
     agent, _ = loop([

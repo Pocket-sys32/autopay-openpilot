@@ -71,7 +71,10 @@ class AgentLoop:
         self._log(AgentPhase.NAVIGATING, action, f"total={quote.total_minor} {quote.currency}")
         # `near` is the pay button's own label; commit re-reads the total from it.
         return summary, quote, near
-      self._apply(action, observation, AgentPhase.NAVIGATING)
+      try:
+        self._apply(action, observation, AgentPhase.NAVIGATING)
+      except StaleNode:
+        continue  # the page re-rendered after observation; only a fresh nid may be acted on
 
   def commit(self, quote: FrozenQuote, *, near: str, mark_submitting: Callable[[], None]) -> dict[str, object]:
     """Complete the purchase the driver authorized, and nothing else."""
@@ -96,7 +99,10 @@ class AgentLoop:
         # Committed immediately before the click, so an interrupted run is provably unpaid.
         mark_submitting()
         paid = True
-      self._apply(action, observation, AgentPhase.COMMITTING)
+      try:
+        self._apply(action, observation, AgentPhase.COMMITTING)
+      except StaleNode:
+        continue  # never retry a click against the old DOM
 
   # -- internals -----------------------------------------------------------------------------------
 

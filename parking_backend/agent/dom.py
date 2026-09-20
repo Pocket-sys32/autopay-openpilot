@@ -7,7 +7,7 @@ fields are never harvested at all, so there is no nid by which the model could r
 from __future__ import annotations
 
 from parking_backend.agent.secrets import REDACTED, SecretVault, redact
-from parking_backend.agent.types import Node, Observation
+from parking_backend.agent.types import Node, Observation, StaleNode
 
 
 MAX_NODES = 120
@@ -153,5 +153,9 @@ def detect_hints(text: str, nodes: tuple[Node, ...]) -> tuple[str, ...]:
 
 def resolve(driver, nid: str):
   """Find the element a nid refers to. Only ever called with a nid from the current observation."""
+  from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
   from selenium.webdriver.common.by import By
-  return driver.find_element(By.CSS_SELECTOR, f'[data-pa-nid="{nid}"]')
+  try:
+    return driver.find_element(By.CSS_SELECTOR, f'[data-pa-nid="{nid}"]')
+  except (NoSuchElementException, StaleElementReferenceException) as exc:
+    raise StaleNode(f"{nid} no longer exists on the current page") from exc
