@@ -193,7 +193,7 @@ class Quote:
 class ParkingPolicy:
   policy_version: int
   automatic_enabled: bool = True
-  allowed_provider_ids: tuple[str, ...] = ("demo_google_form",)
+  allowed_provider_ids: tuple[str, ...] = ("demo_google_form", "laz_ttp")
   allowed_currencies: tuple[str, ...] = ("USD",)
   max_transaction_minor: int = 1000
   max_daily_minor: int = 3000
