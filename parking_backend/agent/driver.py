@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from urllib.parse import urlsplit
 
 from parking_backend.agent.dom import capture, harvest, resolve
 from parking_backend.agent.secrets import SecretVault
@@ -21,12 +22,19 @@ NEW_COMMAND_TIMEOUT_S = 600
 PAGE_LOAD_TIMEOUT_S = 30
 DEFAULT_WARMUP_URLS = ("https://www.google.com/", "https://en.wikipedia.org/")
 SECURITY_VERIFICATION_ATTEMPTS = 12
+OBSERVE_ATTEMPTS = 3
+TEXT_ENTRY_ATTEMPTS = 3
+TEXT_ENTRY_SETTLE_S = 0.6
 BY_CSS_SELECTOR = "css selector"
 BY_TAG_NAME = "tag name"
 _AUTOCOMPLETE_SLOTS = {
   "cc-number": "card_number", "cc-csc": "card_cvv", "cc-exp": "card_expiry",
   "cc-exp-month": "card_expiry_month", "cc-exp-year": "card_expiry_year", "postal-code": "card_zip",
 }
+LAZ_CHECKOUT_HOST = "go.lazparking.com"
+CARDCONNECT_DOMAIN = "cardconnect.com"
+LAZ_CARD_SLOTS = ("card_number", "card_expiry_month", "card_expiry_year", "card_cvv")
+LAZ_RETAINED_CARD_SLOTS = ("card_number", "card_expiry_month", "card_expiry_year")
 
 
 def _set_value_js() -> str:
@@ -36,13 +44,11 @@ def _set_value_js() -> str:
   is what the LAZ checkout actually responded to."""
   return """
   const e = arguments[0], v = arguments[1];
-  const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const proto = Object.getPrototypeOf(e);
   const setter = Object.getOwnPropertyDescriptor(proto, 'value');
   e.focus();
   if (setter && setter.set) { setter.set.call(e, v); } else { e.value = v; }
-  e.dispatchEvent(new Event('input', {bubbles: true}));
-  e.dispatchEvent(new Event('change', {bubbles: true}));
-  e.dispatchEvent(new Event('blur', {bubbles: true}));
+  for (const t of ['input', 'change', 'blur']) e.dispatchEvent(new Event(t, {bubbles: true}));
   return e.value;
   """
 
@@ -131,7 +137,20 @@ class DriverSession:
   # -- the Browser surface the loop uses -----------------------------------------------------------
 
   def observe(self, step: int) -> Observation:
-    return harvest(self.driver, step, vault=self.vault)
+    # Chrome can replace its execution context in the narrow interval immediately after a navigation click.
+    # Re-read that new document; a persistent script error still escapes after this short fixed bound.
+    for attempt in range(OBSERVE_ATTEMPTS):
+      try:
+        return harvest(self.driver, step, vault=self.vault)
+      except Exception as exc:
+        # Selenium is an optional runtime dependency in local unit tests, so identify its precise exception
+        # without importing the package merely to exercise this retry boundary.
+        if type(exc).__name__ != "JavascriptException":
+          raise
+        if attempt + 1 == OBSERVE_ATTEMPTS:
+          raise
+        time.sleep(0.5)
+    raise AssertionError("unreachable")
 
   def open_url(self, url: str) -> None:
     self._warm_up()
@@ -140,14 +159,23 @@ class DriverSession:
 
   def tap(self, nid: str) -> None:
     element = resolve(self.driver, nid)
-    # A JS click lands on elements an overlay would otherwise intercept.
-    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'}); arguments[0].click();", element)
+    # Scroll only; let WebDriver perform the actual click so normal hit-testing, focus and event ordering apply.
+    # If an overlay intercepts it, fail and re-observe rather than bypassing what the user would see.
+    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+    element.click()
 
   def type_text(self, nid: str, text: str) -> None:
-    element = resolve(self.driver, nid)
-    written = self.driver.execute_script(_set_value_js(), element, text)
-    if written != text:
-      raise FormChanged(f"the field behind {nid} did not accept the value")
+    # Controlled inputs can briefly echo a write and then be restored by their framework on the next render.
+    # Settle and re-read the live property, retrying only this bounded idempotent write.
+    for _attempt in range(TEXT_ENTRY_ATTEMPTS):
+      element = resolve(self.driver, nid)
+      self.driver.execute_script(_set_value_js(), element, text)
+      time.sleep(TEXT_ENTRY_SETTLE_S)
+      actual = str(element.get_attribute("value") or "")
+      input_type = str(element.get_attribute("type") or "")
+      if _text_was_accepted(input_type, text, actual):
+        return
+    raise FormChanged(f"the field behind {nid} did not retain the value")
 
   def fill_secret(self, slot: str, value: str) -> None:
     """Resolve a payment field structurally, including cross-origin tokenizer frames.
@@ -166,10 +194,65 @@ class DriverSession:
       element = elements[element_index]
       element.click()
       element.send_keys(value)
-      if not _secret_was_accepted(slot, value, str(element.get_attribute("value") or "")):
+      if not _secret_was_accepted(slot, value, _secret_value(self.driver, element)):
         raise FormChanged(f"the {slot} field did not accept its configured value")
     finally:
       driver.switch_to.default_content()
+
+  def prepare_laz_payment(self, host: str) -> tuple[str, ...]:
+    """Fill LAZ's known CardConnect fields without asking the model to infer their shape.
+
+    Card inputs are deliberately absent from observations, so a model can know that payment fields exist
+    but cannot safely choose between one combined expiry box and LAZ's separate month/year boxes.  Keep the
+    provider-specific choice here, next to the structural field resolver and the secret vault.
+    """
+    normalized = host.lower().strip(".")
+    if normalized != LAZ_CHECKOUT_HOST:
+      return ()
+    current_host = (urlsplit(str(self.driver.current_url or "")).hostname or "").lower().strip(".")
+    if current_host != LAZ_CHECKOUT_HOST:
+      raise FormChanged("the LAZ checkout host changed before its payment fields were filled")
+    if self.vault is None:
+      raise FormChanged("no payment details are configured on this backend")
+
+    # Discover the single CardConnect frame and all four fields in one pass before writing any secret. This
+    # is both stricter and much faster than rescanning every unrelated frame once per slot on mobile Appium.
+    try:
+      fields = _laz_card_fields(self.driver)
+      for slot in LAZ_CARD_SLOTS:
+        element = fields[slot]
+        value = self.vault.get(slot)
+        element.click()
+        element.send_keys(value)
+        if not _secret_was_accepted(slot, value, _secret_value(self.driver, element)):
+          raise FormChanged(f"the {slot} field did not accept its configured value")
+    finally:
+      self.driver.switch_to.default_content()
+    self.verify_laz_payment(host, LAZ_CARD_SLOTS)
+    return LAZ_CARD_SLOTS
+
+  def verify_laz_payment(self, host: str, slots: tuple[str, ...]) -> None:
+    """Re-read the stable CardConnect fields immediately before PAY, without exposing their values.
+
+    CardConnect may consume/blank CVV after its input loses focus, so its configured length is checked at the
+    moment it is typed by ``fill_secret``.  The number (possibly masked), month and year remain readable and
+    are checked again here after every field has been filled.
+    """
+    if host.lower().strip(".") != LAZ_CHECKOUT_HOST or tuple(slots) != LAZ_CARD_SLOTS:
+      raise FormChanged("the prepared LAZ payment fields no longer match the expected form")
+    current_host = (urlsplit(str(self.driver.current_url or "")).hostname or "").lower().strip(".")
+    if current_host != LAZ_CHECKOUT_HOST:
+      raise FormChanged("the LAZ checkout host changed before payment")
+    if self.vault is None:
+      raise FormChanged("no payment details are configured on this backend")
+    try:
+      fields = _laz_card_fields(self.driver)
+      for slot in LAZ_RETAINED_CARD_SLOTS:
+        actual = _secret_value(self.driver, fields[slot])
+        if not _secret_was_accepted(slot, self.vault.get(slot), actual):
+          raise FormChanged(f"the {slot} field changed before payment")
+    finally:
+      self.driver.switch_to.default_content()
 
   def select(self, nid: str, option_text: str) -> None:
     from selenium.webdriver.support.ui import Select
@@ -225,6 +308,13 @@ def _wait_for_security_verification(driver) -> None:
         return
 
 
+def _text_was_accepted(input_type: str, expected: str, actual: str) -> bool:
+  """Compare what survived the page's own render without exposing either value to diagnostics."""
+  if input_type.strip().lower() == "tel":
+    return re.sub(r"\D", "", actual) == re.sub(r"\D", "", expected)
+  return actual.strip().casefold() == expected.strip().casefold()
+
+
 def classify_card_field(attributes: dict[str, str]) -> str | None:
   """Classify one input from metadata only; values are never inspected or logged."""
   autocomplete = attributes.get("autocomplete", "").strip().lower()
@@ -277,6 +367,44 @@ def _find_secret_field(driver, slot: str) -> tuple[int | None, int] | None:
       continue  # an unrelated cross-origin frame may not expose a document through WebDriver
   driver.switch_to.default_content()
   return matches[0] if len(matches) == 1 else None
+
+
+def _laz_card_fields(driver) -> dict[str, object]:
+  """Return LAZ's four uniquely classified inputs from one exact CardConnect iframe."""
+  driver.switch_to.default_content()
+  matched_frames = []
+  for frame in driver.find_elements(BY_TAG_NAME, "iframe"):
+    try:
+      parsed = urlsplit(str(frame.get_attribute("src") or ""))
+      host = (parsed.hostname or "").lower().strip(".")
+      if (parsed.scheme.lower() == "https" and
+          (host == CARDCONNECT_DOMAIN or host.endswith(f".{CARDCONNECT_DOMAIN}")) and
+          parsed.username is None and parsed.password is None):
+        matched_frames.append(frame)
+    except Exception:
+      continue
+  if len(matched_frames) != 1:
+    raise FormChanged("exactly one CardConnect payment frame was not found")
+  driver.switch_to.frame(matched_frames[0])
+  fields: dict[str, object] = {}
+  for element in driver.find_elements(BY_CSS_SELECTOR, "input"):
+    if not element.is_displayed():
+      continue
+    slot = classify_card_field(_field_attributes(element))
+    if slot not in LAZ_CARD_SLOTS:
+      continue
+    if slot in fields:
+      raise FormChanged(f"more than one visible {slot} field was found")
+    fields[slot] = element
+  missing = [slot for slot in LAZ_CARD_SLOTS if slot not in fields]
+  if missing:
+    raise FormChanged(f"exactly one visible {missing[0]} field was not found")
+  return fields
+
+
+def _secret_value(driver, element) -> str:
+  """Read the live tokenizer property; ChromeDriver can expose an empty HTML attribute for a filled field."""
+  return str(driver.execute_script("return arguments[0].value || '';", element) or "")
 
 
 def _secret_was_accepted(slot: str, expected: str, actual: str) -> bool:

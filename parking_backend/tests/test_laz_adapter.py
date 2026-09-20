@@ -4,7 +4,7 @@ from unittest import mock
 
 from parking_backend.appium_adapter import FormChanged
 from parking_backend.laz_adapter import (DEFAULT_WARMUP_URLS, LazAdapter, LazProfile, is_decline,
-                                         parse_pay_total_minor, split_expiry)
+                                         is_provider_verification, parse_pay_total_minor, split_expiry)
 
 
 def adapter() -> LazAdapter:
@@ -28,6 +28,11 @@ class TestLazAdapter(unittest.TestCase):
     self.assertTrue(is_decline(real_text))
     self.assertFalse(is_decline("PAY $27.95\nCould not validate reservation 100-01"))  # a reservation error, not a decline
     self.assertFalse(is_decline("Thank you, here is your receipt"))
+
+  def test_provider_verification_is_classified_separately_from_checkout_content(self):
+    self.assertTrue(is_provider_verification("Just a moment...", ""))
+    self.assertTrue(is_provider_verification("LAZ Parking", "Please verify you are human"))
+    self.assertFalse(is_provider_verification("LAZ Parking", "3959 Harney St\nGO"))
 
   def test_only_allowlisted_location_and_three_hours(self):
     a = adapter()

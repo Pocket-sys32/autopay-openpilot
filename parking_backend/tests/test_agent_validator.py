@@ -1,10 +1,11 @@
 import unittest
 
 from parking_backend.agent.actions import parse_action
+from parking_backend.agent.laz_checkout import laz_checkout_proof
 from parking_backend.agent.price import parse_total_minor, PriceUnreadable
 from parking_backend.agent.secrets import SecretVault
-from parking_backend.agent.types import (AgentPhase, AgentPolicy, AgentStuck, InvariantDrift, Node,
-                                         Observation, OffDomain, StaleNode, UserInterventionRequired)
+from parking_backend.agent.types import (AgentPhase, AgentPolicy, AgentStuck, FrozenQuote, InvariantDrift,
+                                         Node, Observation, OffDomain, StaleNode, UserInterventionRequired)
 from parking_backend.agent.validator import ActionValidator, registrable
 
 
@@ -35,6 +36,17 @@ class TestPhaseGating(unittest.TestCase):
       validator().observe(observation(hints=("captcha_present",)), AgentPhase.NAVIGATING)
     self.assertEqual(caught.exception.code, "CAPTCHA")
 
+  def test_provider_verification_has_an_actionable_distinct_outcome(self):
+    with self.assertRaises(UserInterventionRequired) as caught:
+      validator().observe(observation(hints=("provider_verification_present",)), AgentPhase.NAVIGATING)
+    self.assertEqual(caught.exception.code, "PROVIDER_VERIFICATION")
+    self.assertIn("manually", str(caught.exception))
+
+  def test_an_off_domain_page_cannot_request_manual_verification(self):
+    with self.assertRaises(OffDomain):
+      validator().observe(observation(host="attacker.example", hints=("captcha_present",)),
+                          AgentPhase.NAVIGATING)
+
   def test_navigation_is_unreachable_after_confirmation(self):
     for action in ({"action": "OPEN_URL", "url": "https://parking.example.com/other"}, {"action": "BACK"}):
       with self.subTest(action=action["action"]), self.assertRaises(InvariantDrift):
@@ -57,8 +69,40 @@ class TestNodeAddressing(unittest.TestCase):
       validator().check(parse_action({"action": "TAP", "nid": "n99"}), observation(), AgentPhase.NAVIGATING)
 
   def test_a_node_on_screen_is_accepted(self):
-    self.assertEqual(validator().check(parse_action({"action": "TAP", "nid": "n1"}), observation(),
-                                       AgentPhase.NAVIGATING).nid, "n1")
+    self.assertEqual(validator().check(parse_action({"action": "TAP", "nid": "n2"}), observation(),
+                                       AgentPhase.NAVIGATING).nid, "n2")
+
+  def test_a_payment_button_cannot_be_tapped_during_navigation(self):
+    for label in ("PAY $14.50", "Place order", "Confirm and pay", "Complete purchase", "Google Pay •••• 5381"):
+      with self.subTest(label=label), self.assertRaises(InvariantDrift):
+        validator().check(
+          parse_action({"action": "TAP", "nid": "n1"}),
+          observation(nodes=(Node("n1", "button", label),)),
+          AgentPhase.NAVIGATING,
+        )
+
+  def test_profile_text_cannot_be_written_into_a_focusable_container(self):
+    with self.assertRaises(InvariantDrift):
+      validator().check(
+        parse_action({"action": "FILL_PROFILE", "nid": "n1", "field": "plate"}),
+        observation(nodes=(Node("n1", "div", ""),)),
+        AgentPhase.NAVIGATING,
+      )
+
+  def test_profile_values_may_target_a_select_but_model_text_may_not(self):
+    form = observation(nodes=(Node("n1", "select", "State", options=("California",)),))
+    action = validator().check(
+      parse_action({"action": "FILL_PROFILE", "nid": "n1", "field": "plate_state"}),
+      form,
+      AgentPhase.NAVIGATING,
+    )
+    self.assertEqual(action.field, "plate_state")
+    with self.assertRaises(InvariantDrift):
+      validator().check(
+        parse_action({"action": "TYPE", "nid": "n1", "text": "CA"}),
+        form,
+        AgentPhase.NAVIGATING,
+      )
 
 
 class TestDomain(unittest.TestCase):
@@ -200,6 +244,37 @@ class TestVerifyBeforePay(unittest.TestCase):
     without = observation(text_digest="Total $14.50", nodes=(Node("n1", "button", "PAY $14.50"),))
     with self.assertRaises(InvariantDrift):
       validator().verify_before_pay(quote, without, near="PAY $14.50")
+
+  def test_laz_vehicle_is_verified_from_its_structured_field_not_body_text(self):
+    url = ("https://go.lazparking.com/buynow/edit?l=143245&" +
+           "start=2099-09-20T10:04:49.829Z&end=2099-09-20T13:04:49.829Z")
+    proof = laz_checkout_proof(url, "143245")
+    quote = FrozenQuote(host="lazparking.com", plate="AQUAM4", duration_seconds=10800,
+                        total_minor=2795, currency="USD", laz_location_id="143245",
+                        laz_start_unix_us=proof.start_unix_us, laz_end_unix_us=proof.end_unix_us)
+    observed = Observation(
+      step=1, url=url, host="go.lazparking.com", text_digest="LAZ Parking\nTotal $27.95",
+      nodes=(Node("n1", "textbox", "License Plate", value="aquam-4", field_key="parkerLicensePlate"),
+             Node("n2", "button", "PAY $27.95")),
+    )
+
+    validator().verify_before_pay(quote, observed, near="PAY $27.95")
+
+  def test_laz_vehicle_field_mismatch_stops_before_payment(self):
+    url = ("https://go.lazparking.com/buynow/edit?l=143245&" +
+           "start=2099-09-20T10:04:49.829Z&end=2099-09-20T13:04:49.829Z")
+    proof = laz_checkout_proof(url, "143245")
+    quote = FrozenQuote(host="lazparking.com", plate="AQUAM4", duration_seconds=10800,
+                        total_minor=2795, currency="USD", laz_location_id="143245",
+                        laz_start_unix_us=proof.start_unix_us, laz_end_unix_us=proof.end_unix_us)
+    observed = Observation(
+      step=1, url=url, host="go.lazparking.com", text_digest="LAZ Parking\nTotal $27.95",
+      nodes=(Node("n1", "textbox", "License Plate", value="OTHER1", field_key="parkerLicensePlate"),
+             Node("n2", "button", "PAY $27.95")),
+    )
+
+    with self.assertRaises(InvariantDrift):
+      validator().verify_before_pay(quote, observed, near="PAY $27.95")
 
 
 class TestPriceReading(unittest.TestCase):

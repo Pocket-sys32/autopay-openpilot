@@ -1,4 +1,5 @@
 """The whole observe/act loop, driven by a scripted model over a scripted browser."""
+from dataclasses import replace
 import unittest
 
 from parking_backend.agent.llm import ScriptedLLM
@@ -63,6 +64,23 @@ class TestNavigation(unittest.TestCase):
     self.assertIn("14.50", near)
     self.assertEqual(browser.tapped, ["n1"])
     self.assertEqual(browser.selected, [("n2", "3 hours")])
+
+  def test_an_opt_in_dry_run_waits_for_a_person_to_clear_verification(self):
+    class ManuallyClearedBrowser(FakeBrowser):
+      def observe(self, step):
+        observed = super().observe(step)
+        if not self.waits:
+          return replace(observed, hints=("captcha_present",))
+        return observed
+
+    browser = ManuallyClearedBrowser(pages(), START)
+    agent, _ = loop(TO_CHECKOUT, browser=browser,
+                    pol=policy(dry_run=True, manual_verification_wait_s=10))
+    summary, _quote, _near = agent.navigate(START)
+    self.assertEqual(summary.total_minor, 1450)
+    self.assertEqual(browser.waits, [2])
+    self.assertEqual(agent.policy.transcript[0].action, "MANUAL_WAIT(CAPTCHA)")
+    self.assertEqual(agent.policy.transcript[1].action, "MANUAL_WAIT_CLEARED")
 
   def test_a_node_that_disappears_between_observation_and_click_is_reobserved(self):
     class RerenderingBrowser(FakeBrowser):
@@ -228,6 +246,69 @@ class TestCommit(unittest.TestCase):
     _summary, quote, near = agent.navigate(START)
     agent.commit(quote, near=near, mark_submitting=lambda: order.append("mark"))
     self.assertEqual(order[-2:], ["mark", "tap:n3"])
+
+  def test_the_pay_button_cannot_be_clicked_twice(self):
+    class RelabelledAfterSubmitBrowser(FakeBrowser):
+      def tap(self, nid):
+        super().tap(nid)
+        if nid == "n3":
+          self.pages[CHECKOUT].nodes = (Node("n4", "button", "Retry payment"),)
+
+    browser = RelabelledAfterSubmitBrowser(pages(), START)
+    agent, browser = loop(TO_CHECKOUT + [
+      {"action": "TAP", "nid": "n3"},
+      {"action": "TAP", "nid": "n4"},
+    ], browser=browser)
+    _summary, quote, near = agent.navigate(START)
+    marks = []
+    with self.assertRaises(InvariantDrift):
+      agent.commit(quote, near=near, mark_submitting=lambda: marks.append(True))
+    self.assertEqual(marks, [True])
+    self.assertEqual(browser.tapped.count("n3"), 1)
+    self.assertNotIn("n4", browser.tapped)
+
+  def test_an_ambiguous_pay_click_cannot_later_be_reported_as_success(self):
+    class StalePayBrowser(FakeBrowser):
+      def tap(self, nid):
+        if nid == "n3":
+          raise StaleNode("the PAY element changed while the click was resolving")
+        super().tap(nid)
+
+    browser = StalePayBrowser(pages(), START)
+    agent, _ = loop(TO_CHECKOUT + [
+      {"action": "TAP", "nid": "n3"},
+      {"action": "DONE", "outcome": "paid", "evidence_text": "must not be consumed"},
+    ], browser=browser)
+    _summary, quote, near = agent.navigate(START)
+    marks = []
+    with self.assertRaises(StaleNode):
+      agent.commit(quote, near=near, mark_submitting=lambda: marks.append(True))
+    self.assertEqual(marks, [True])
+    self.assertNotIn("n3", browser.tapped)
+
+  def test_a_non_payment_click_is_forbidden_while_committing(self):
+    browser = FakeBrowser(pages(), START)
+    browser.pages[CHECKOUT].nodes += (Node("n4", "button", "Use another payment method"),)
+    agent, _ = loop(TO_CHECKOUT + [{"action": "TAP", "nid": "n4"}], browser=browser)
+    _summary, quote, near = agent.navigate(START)
+    marks = []
+    with self.assertRaises(InvariantDrift):
+      agent.commit(quote, near=near, mark_submitting=lambda: marks.append(True))
+    self.assertEqual(marks, [])
+    self.assertNotIn("n4", browser.tapped)
+
+  def test_two_amount_bearing_pay_controls_are_ambiguous(self):
+    browser = FakeBrowser(pages(), START)
+    browser.pages[CHECKOUT].nodes += (Node("n4", "button", "Confirm and pay $14.50"),)
+    agent, _ = loop(TO_CHECKOUT + [{"action": "TAP", "nid": "n3"}], browser=browser)
+    _summary, quote, near = agent.navigate(START)
+    marks = []
+
+    with self.assertRaises(InvariantDrift):
+      agent.commit(quote, near=near, mark_submitting=lambda: marks.append(True))
+
+    self.assertEqual(marks, [])
+    self.assertNotIn("n3", browser.tapped[1:])
 
   def test_claiming_success_without_paying_is_refused(self):
     with self.assertRaises(InvariantDrift):

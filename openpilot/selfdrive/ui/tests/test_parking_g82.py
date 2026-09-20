@@ -6,6 +6,7 @@ from openpilot.cereal import messaging
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici import parking_overlay
 from openpilot.selfdrive.ui.mici.layouts.settings.parking import ParkingLayoutMici
+from openpilot.selfdrive.ui.mici.layouts.main import MiciMainLayout
 from openpilot.selfdrive.ui.mici.onroad import alert_renderer as mici_alerts
 from openpilot.selfdrive.ui.mici.onroad import hud_renderer
 from openpilot.selfdrive.ui.onroad import alert_renderer as big_alerts
@@ -136,6 +137,47 @@ class TestParkingG82(unittest.TestCase):
       self.assertTrue(ParkingLayoutMici._settings_enabled())
       self.flags["IsOffroad"] = False
       self.assertFalse(ParkingLayoutMici._settings_enabled())
+
+  def test_g82_camera_is_display_only_for_navigation(self):
+    self.state.started = True
+    with patch("openpilot.selfdrive.ui.mici.layouts.main.ui_state", self.state):
+      self.assertTrue(MiciMainLayout._g82_display_only())
+
+      self.state.ignition = True
+      self.messages["deviceState"].started = True
+      self.assertFalse(MiciMainLayout._g82_display_only())
+
+  def test_enabling_g82_does_not_pop_open_settings(self):
+    self.state.started = True
+    layout = object.__new__(MiciMainLayout)
+    layout._onboarding_window = object()
+    layout._settings_layout = object()
+    layout._prev_onroad = False
+    layout._prev_standstill = False
+    layout._onroad_time_delay = None
+
+    with patch("openpilot.selfdrive.ui.mici.layouts.main.ui_state", self.state), \
+         patch("openpilot.selfdrive.ui.mici.layouts.main.gui_app") as app:
+      app.widget_in_stack.side_effect = lambda widget: widget is layout._settings_layout
+      layout._handle_transitions()
+      self.assertIsNone(layout._onroad_time_delay)
+      app.pop_widgets_to.assert_not_called()
+
+  def test_g82_gps_movement_does_not_pop_settings(self):
+    self.state.started = True
+    self.set_gps(speed=2.0)
+    layout = object.__new__(MiciMainLayout)
+    layout._onboarding_window = object()
+    layout._settings_layout = object()
+    layout._prev_onroad = True
+    layout._prev_standstill = True
+    layout._onroad_time_delay = None
+
+    with patch("openpilot.selfdrive.ui.mici.layouts.main.ui_state", self.state), \
+         patch("openpilot.selfdrive.ui.mici.layouts.main.gui_app") as app:
+      app.widget_in_stack.return_value = False
+      layout._handle_transitions()
+      app.pop_widgets_to.assert_not_called()
 
   def test_banner_waiting_scanning_and_speed_threshold(self):
     with patch.object(parking_overlay, "ui_state", self.state):

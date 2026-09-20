@@ -1,7 +1,7 @@
 """The harvester, against a driver double that returns what the injected JS would."""
 import unittest
 
-from parking_backend.agent.dom import capture, detect_hints, harvest
+from parking_backend.agent.dom import CARD_SELECTOR, capture, detect_hints, harvest
 from parking_backend.agent.secrets import SecretVault
 from parking_backend.agent.types import Node
 
@@ -82,6 +82,34 @@ class TestHarvest(unittest.TestCase):
                                   "input_type": "", "enabled": True, "options": ["1 hour", "3 hours"]}])
     observation = harvest(FakeDriver(with_select), 1)
     self.assertEqual(observation.node("n1").options, ("1 hour", "3 hours"))
+
+  def test_stable_form_key_is_carried_without_becoming_a_selector(self):
+    keyed = payload(nodes=[{"nid": "n1", "role": "text", "name": "Plate", "value": "",
+                            "input_type": "text", "enabled": True, "options": [],
+                            "field_key": "parkerLicensePlate"}])
+    self.assertEqual(harvest(FakeDriver(keyed), 1).node("n1").field_key, "parkerLicensePlate")
+
+  def test_filling_a_field_changes_the_screen_hash_without_hashing_its_value(self):
+    empty = harvest(FakeDriver(payload()), 1)
+    first = harvest(FakeDriver(payload(nodes=[{**payload()["nodes"][0], "value": "DEMO123"},
+                                              payload()["nodes"][1]])), 2)
+    second = harvest(FakeDriver(payload(nodes=[{**payload()["nodes"][0], "value": "OTHER456"},
+                                               payload()["nodes"][1]])), 3)
+    self.assertNotEqual(empty.screen_hash, first.screen_hash)
+    self.assertEqual(first.screen_hash, second.screen_hash)
+
+  def test_cardholder_name_is_not_hidden_with_the_actual_card_fields(self):
+    self.assertIn(":not([autocomplete='cc-name'])", CARD_SELECTOR)
+    self.assertIn(":not([name*='name' i])", CARD_SELECTOR)
+
+  def test_provider_verification_is_distinct_from_checkout_captcha(self):
+    self.assertIn("provider_verification_present", detect_hints("", (), title="Just a moment..."))
+    self.assertNotIn("captcha_present", detect_hints("", (), title="Just a moment..."))
+    self.assertIn("captcha_present", detect_hints("Please verify you are human", ()))
+
+  def test_an_embedded_recaptcha_reference_is_not_itself_a_visible_challenge(self):
+    self.assertNotIn("captcha_present", detect_hints("This site is protected by reCAPTCHA", ()))
+    self.assertIn("captcha_present", detect_hints("", (), captcha_challenge=True))
 
 
 class TestScreenshots(unittest.TestCase):

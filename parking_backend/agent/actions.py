@@ -18,7 +18,8 @@ PROFILE_FIELDS = frozenset({
 })
 SECRET_SLOTS = frozenset({"card_number", "card_cvv", "card_expiry", "card_expiry_month", "card_expiry_year",
                           "card_zip"})
-INTERVENTION_CODES = frozenset({"APP_REQUIRED", "CAPTCHA", "ACCOUNT_REQUIRED", "OTP_REQUIRED", "AMBIGUOUS"})
+INTERVENTION_CODES = frozenset({"APP_REQUIRED", "CAPTCHA", "PROVIDER_VERIFICATION", "ACCOUNT_REQUIRED",
+                                "OTP_REQUIRED", "AMBIGUOUS"})
 SCROLL_DIRECTIONS = frozenset({"up", "down"})
 MAX_WAIT_SECONDS = 5
 MAX_TEXT_LENGTH = 120

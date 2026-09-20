@@ -115,7 +115,13 @@ class MiciMainLayout(Scroller):
       # onroad: after delay, pop nav stack and scroll to onroad
       # offroad: immediately scroll to home, but don't pop nav stack (can stay in settings)
       if ui_state.started:
-        self._onroad_time_delay = rl.get_time()
+        # G82 mode uses the onroad camera while the device is physically offroad.
+        # Do not let enabling it from settings schedule a pop that locks the user
+        # out of the controls they just enabled.
+        if self._g82_display_only() and gui_app.widget_in_stack(self._settings_layout):
+          self._onroad_time_delay = None
+        else:
+          self._onroad_time_delay = rl.get_time()
       else:
         self._scroll_to(self._home_layout)
 
@@ -126,9 +132,14 @@ class MiciMainLayout(Scroller):
 
     # When car leaves standstill, pop nav stack and scroll to onroad
     standstill = self._at_standstill()
-    if not standstill and self._prev_standstill:
+    if not self._g82_display_only() and not standstill and self._prev_standstill:
       gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
     self._prev_standstill = standstill
+
+  @staticmethod
+  def _g82_display_only() -> bool:
+    return (ui_state.parking_g82_active and
+            not (ui_state.sm["deviceState"].started and ui_state.ignition))
 
   @staticmethod
   def _at_standstill() -> bool:

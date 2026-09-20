@@ -1,7 +1,7 @@
-"""Read-only check of the state the LAZ checkout's reCAPTCHA would see.
+"""No-payment check of the browser state the LAZ entry and checkout pages would see.
 
-Opens a browser session exactly as LazAdapter would, warms it, loads the entry page and reports what it finds.
-It never fills the checkout form, never clicks PAY and never buys anything, so it is safe to run at any time.
+It never calls FlareSolverr, fills the checkout form, clicks PAY or buys anything. It is still a live
+anti-abuse probe, so run it once for an explicitly authorised diagnosis rather than polling or retrying it.
 Run it on the VM, against the local Appium:
 
     PYTHONPATH=/tmp/proberoot PARKING_DIAG_DIR=/tmp/probe-diag \\
@@ -32,11 +32,12 @@ def main() -> None:
   options.set_capability("appium:newCommandTimeout", 150)
   options.set_capability("appium:noReset", True)
   options.set_capability("appium:chromedriverExecutable", CHROMEDRIVER_PATH)
-  chrome_options: dict[str, object] = {"args": ["--disable-blink-features=AutomationControlled"]}
-  if os.getenv("PARKING_PROBE_ATTACH") == "1":
+  configured_attach = os.getenv("PARKING_PROBE_ATTACH")
+  attach = probe.attach_to_chrome if configured_attach is None else configured_attach == "1"
+  chrome_options: dict[str, object] = {}
+  if attach:
     # chromedriver otherwise relaunches Chrome with a cleared data directory, which throws away the signed-in
-    # session before the page is ever loaded. Attaching to the running app keeps the profile; the command-line
-    # args above are not applied in that case, because Chrome is not restarted.
+    # session before the page is ever loaded. Attaching to the running app keeps the profile.
     chrome_options["androidUseRunningApp"] = True
     chrome_options["androidPackage"] = "com.android.chrome"
   options.set_capability("appium:chromeOptions", chrome_options)
@@ -44,9 +45,12 @@ def main() -> None:
   driver = webdriver.Remote(probe.appium_url, options=options)
   driver.set_page_load_timeout(30)
   try:
+    probe._stamp = time.strftime("%Y%m%dT%H%M%S")
+    print(f"browser mode                  : {'attached persistent profile' if attach else 'new browser session'}")
+    print("FlareSolverr exercised        : no")
     probe._warm_up(driver)
 
-    driver.get("https://www.google.com/")
+    print(f"google navigation             : {_navigate(driver, 'https://www.google.com/')}")
     time.sleep(1)
     print(f"google session cookie present : {probe._google_session(driver)}")
     print(f"cookie names visible here     : {_cookie_names(driver)}")
@@ -54,7 +58,7 @@ def main() -> None:
     print(f"user agent                    : {driver.execute_script('return navigator.userAgent')}")
     print(f"signed in per google          : {_signed_in(driver)}")  # navigates away, so read cookies first
 
-    driver.get(ENTRY_URL)
+    print(f"LAZ navigation                : {_navigate(driver, ENTRY_URL)}")
     time.sleep(3)
     go_button = _wait_for_go(driver)
     print(f"cloudflare passed (GO button) : {'yes' if go_button else 'no'}")
@@ -78,7 +82,7 @@ def _signed_in(driver) -> str:
   """Ask Google directly: a signed-out browser is bounced from the account page to a sign-in screen. Reading
   the homepage's markup instead looks conclusive and is not — those pages mention "Google Account" either way."""
   try:
-    driver.get("https://myaccount.google.com/")
+    outcome = _navigate(driver, "https://myaccount.google.com/")
     time.sleep(2)
     url = driver.current_url
   except Exception:
@@ -86,8 +90,17 @@ def _signed_in(driver) -> str:
   # Report where it actually landed: "did not end up on a sign-in page" is not the same as "reached the
   # account page", and a navigation that quietly failed would otherwise read as signed in.
   if "myaccount.google.com" in url:
-    return f"yes, reached {url[:70]}"
-  return f"no, bounced to {url[:70]}"
+    return f"yes, reached {url[:70]} ({outcome})"
+  return f"no, bounced to {url[:70]} ({outcome})"
+
+
+def _navigate(driver, url: str) -> str:
+  """A renderer timeout is diagnostic data, not a reason for this no-payment probe to crash."""
+  try:
+    driver.get(url)
+  except Exception as exc:
+    return type(exc).__name__
+  return "loaded"
 
 
 def _cookie_names(driver) -> str:
@@ -125,13 +138,16 @@ def _has_checkout_form(driver) -> bool:
 
 
 def _wait_for_go(driver) -> bool:
-  for _ in range(30):
-    try:
-      if driver.execute_script("return !!document.getElementById('buyNowSearch')"):
-        return True
-    except Exception:
-      pass
-    time.sleep(1)
+  for reload_left in (1, 0):
+    for _ in range(30):
+      try:
+        if driver.execute_script("return !!document.getElementById('buyNowSearch')"):
+          return True
+      except Exception:
+        pass
+      time.sleep(1)
+    if reload_left:
+      _navigate(driver, ENTRY_URL)
   return False
 
 

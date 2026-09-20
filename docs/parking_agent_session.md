@@ -227,7 +227,7 @@ Completed after the M5 handoff:
 Still useful as follow-up hardening: add captured provider/page fixtures for common failure modes and a
 larger adversarial prompt-injection corpus after the first dry-run DOMs are available.
 
-## Current continuation point
+## Continuation history after M7
 
 M7 was committed and pushed as `f1ee37374`. Subsequent live-validation fixes were also committed and pushed:
 
@@ -237,15 +237,63 @@ M7 was committed and pushed as `f1ee37374`. Subsequent live-validation fixes wer
 - `8b1a2b2b6` — give Gemini the exact flat action schema
 - `1f8b1e3a6` — re-observe after a provider rerenders a node
 
-The VM service account has Vertex access and a real Vertex request succeeded. The backend is deployed in
-enabled dry-run/attach mode, Chrome is signed in, and `myaccount.google.com` opens in that persistent profile.
-Live checkout attempts reached provider security checks but never reached confirmation or payment. At the
-user's request, further dry runs and provider probes are paused to avoid consuming CAPTCHA/trust reputation;
-do not clear, relaunch, or probe the Chrome profile without renewed authorization.
+At that stage the VM service account had Vertex access and a real Vertex request had succeeded. The backend was
+deployed in enabled dry-run/attach mode, Chrome was signed in, and `myaccount.google.com` opened in that
+persistent profile. Initial live checkout attempts reached provider security checks but not confirmation or
+payment. Further probes remained individually authorised and could not clear or recreate the Chrome profile.
+
+### Live LAZ validation — 2026-09-20
+
+With renewed authorization, backend attempt `agent-dry-2fd4384f12d9` ran through the authenticated API in
+`generic_agent` dry-run and attached-profile mode. The emulator Chrome profile was open and carried a signed-in
+Google web session, but the browser remained on LAZ's Cloudflare `Just a moment...` page before the GO button.
+The attempt stopped before any model action, form fill, confirmation, or PAY click with
+`action_required / CAPTCHA_BLOCKED`; the result email was sent. No automatic retry was issued.
+
+After deploying explicit provider-verification classification, one verification run
+(`agent-dry-3159251994c9`) stopped at the same pre-GO page with
+`action_required / PROVIDER_VERIFICATION_REQUIRED` and the manual-action message. Its diagnostic again recorded
+zero agent steps; nothing was filled or purchased. This was the single post-deployment verification run, not an
+automatic retry loop.
+
+At that point this established that the blocker was the provider's entry-page verification, not checkout
+reCAPTCHA, Google sign-in, or the payment form. The supported recovery was manual verification in the existing
+profile, followed by one newly authorized dry run. Do not add browsing history, automate the verification, or
+treat a passing entry-page probe as evidence that checkout reCAPTCHA will pass.
 
 Offline development resumed at the generic payment boundary. The next change makes `FILL_SECRET` locate a
 card field deterministically by slot, including provider-hosted iframes, instead of requiring a model-visible
 node id. It also adds combined-expiry support, recent action context, iframe payment hints, and a safer domain
 boundary for common country-code suffixes. After this is committed and pushed, the next useful offline work is
-captured synthetic provider fixtures and adversarial prompt-injection coverage. M6 live checkout validation
-and any paid session remain intentionally paused.
+captured synthetic provider fixtures and adversarial prompt-injection coverage. At that point M6 live checkout
+validation and any paid session remained intentionally paused.
+
+### Successful supervised LAZ dry run — 2026-09-20
+
+The generic agent subsequently reached the quote boundary for the tested LAZ guest-checkout flow. The fixes
+required were all below the payment boundary:
+
+- Gemini JSON mode now has a discriminated action schema and thinking disabled for this one-action classifier,
+  preventing reasoning tokens from exhausting the response budget.
+- Only a visible reCAPTCHA challenge frame is classified as a CAPTCHA; LAZ's always-present invisible anchor is
+  not itself a blocker.
+- DOM labels normalize whitespace before choosing a fallback. This prevents LAZ's non-breaking-space
+  placeholder from hiding the real plate field label, and unlabeled focusable containers are no longer exposed.
+- Text entry waits for the provider's framework render and verifies that the value was retained. Navigation
+  progress hashes record only filled/empty state, never profile values.
+- On the exact `go.lazparking.com` checkout host, stable field ids drive a deterministic, state-first profile
+  planner. Gemini remains responsible for the variable entry/rate navigation and recognizing the final quote,
+  but not for choosing LAZ's known identity and vehicle fields.
+- Navigation cannot activate obvious PAY, order, or wallet controls before quote-bound confirmation.
+
+Attempt `agent-dry-f378a13dcb6e` used the backend API with dry run and the attached Chrome profile. It reached a
+three-hour `USD 27.95` confirmation, after which the diagnostic helper submitted `cancel`. The persisted state
+sequence was `accepted -> preparing -> confirmation_required -> failed`, with terminal reason `USER_DECLINED`.
+There was no `committing` or `submitting` event, and the result states that nothing was purchased. All four VM
+services were active afterward and no attempt remained active.
+
+This validates the tested location and the common `clip.lazparking.com -> go.lazparking.com` guest-checkout
+shape; it does not establish compatibility with every LAZ location. App-only, account/OTP, alternate permit,
+different payment-provider, and materially changed checkout flows still stop safely and require separate
+fixture or supervised dry-run coverage. The final local verification ran 229 backend tests successfully, with
+seven API tests skipped because FastAPI is unavailable in that environment; Ruff and `git diff --check` passed.

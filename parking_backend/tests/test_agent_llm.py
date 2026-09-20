@@ -67,6 +67,13 @@ class TestVertexClient(unittest.TestCase):
     config = session.posts[0]["body"]["generationConfig"]
     self.assertEqual(config["temperature"], 0)
     self.assertEqual(config["responseMimeType"], "application/json")
+    variants = config["responseJsonSchema"]["anyOf"]
+    by_action = {variant["properties"]["action"]["enum"][0]: variant for variant in variants}
+    self.assertEqual(by_action["WAIT"]["required"], ["action"])
+    self.assertEqual(by_action["TAP"]["required"], ["action", "nid"])
+    self.assertNotIn("duration_seconds", by_action["WAIT"]["properties"])
+    self.assertFalse(by_action["READY_TO_PURCHASE"]["additionalProperties"])
+    self.assertEqual(config["thinkingConfig"], {"thinkingBudget": 0})
 
   def test_a_screenshot_is_sent_inline_when_there_is_one(self):
     session = FakeSession()
@@ -81,12 +88,30 @@ class TestVertexClient(unittest.TestCase):
 
   def test_usage_metadata_is_retained_for_the_step_log(self):
     session = FakeSession(usage={"promptTokenCount": 120, "candidatesTokenCount": 18,
-                                 "totalTokenCount": 138})
+                                 "thoughtsTokenCount": 7, "totalTokenCount": 145})
     client = self.client(session)
     client.propose(system="sys", user="obs", screenshot_jpeg=None)
     self.assertEqual((client.last_telemetry.prompt_tokens, client.last_telemetry.candidate_tokens,
-                      client.last_telemetry.total_tokens), (120, 18, 138))
+                      client.last_telemetry.thought_tokens, client.last_telemetry.total_tokens),
+                     (120, 18, 7, 145))
     self.assertGreaterEqual(client.last_telemetry.elapsed_ms, 0)
+
+  def test_a_max_tokens_candidate_fails_closed_with_a_precise_reason(self):
+    payload = {"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": [{"text": "{"}]}}]}
+    session = FakeSession(post_response=FakeResponse(payload))
+    with self.assertRaisesRegex(LLMUnavailable, "MAX_TOKENS"):
+      self.client(session).propose(system="s", user="u", screenshot_jpeg=None)
+
+  def test_non_thought_text_parts_are_joined(self):
+    payload = {"candidates": [{"finishReason": "STOP", "content": {"parts": [
+      {"thought": True, "text": "private reasoning"}, {"text": '{"action":'}, {"text": '"BACK"}'},
+    ]}}]}
+    session = FakeSession(post_response=FakeResponse(payload))
+    client = self.client(session)
+    answer = client.propose(system="s", user="u", screenshot_jpeg=None)
+    self.assertEqual(json.loads(answer)["action"], "BACK")
+    self.assertEqual((client.last_telemetry.response_parts, client.last_telemetry.response_chars),
+                     (3, len(answer)))
 
   def test_the_token_is_reused_rather_than_refetched(self):
     session = FakeSession()

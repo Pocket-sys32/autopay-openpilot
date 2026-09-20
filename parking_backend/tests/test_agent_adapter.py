@@ -107,6 +107,16 @@ class TestAgentThroughWorker(unittest.TestCase):
     self.assertEqual(row["state"], "action_required")
     self.assertEqual(row["reason_code"], "PRICE_LIMIT_EXCEEDED")
 
+  def test_the_checkout_duration_must_match_the_request(self):
+    mismatched = [*TO_CHECKOUT[:-1], {**TO_CHECKOUT[-1], "duration_seconds": 3600}]
+    self.store.put_attempt("comma", attempt(self.now_ms), now_ms=self.now_ms)
+    worker = self.build(mismatched)
+    worker.process_once()
+    row = self.row()
+    self.assertEqual((row["state"], row["reason_code"]), ("action_required", "INVARIANT_DRIFT"))
+    self.assertIsNone(row["confirmation"])
+    self.assertNotIn("n3", self.browser.tapped)
+
   def test_a_model_outage_has_a_precise_non_payment_outcome(self):
     class UnavailableLLM:
       def propose(self, **_kwargs):

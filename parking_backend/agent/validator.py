@@ -5,9 +5,11 @@ next; this decides what is allowed to happen at all.
 """
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit
 
 from parking_backend.agent.actions import Action
+from parking_backend.agent.laz_checkout import laz_checkout_proof
 from parking_backend.agent.price import PriceUnreadable, parse_total_minor
 from parking_backend.agent.secrets import SecretVault, guarded_literals
 from parking_backend.agent.types import (AgentPhase, AgentPolicy, AgentStuck, FrozenQuote, InvariantDrift,
@@ -24,6 +26,8 @@ ALLOWED_BY_PHASE = {
                                     "REQUEST_USER", "ERROR"}),
 }
 NODE_ACTIONS = frozenset({"TAP", "TYPE", "SELECT", "FILL_PROFILE"})
+TEXT_ENTRY_ROLES = frozenset({"email", "number", "search", "tel", "text", "textbox", "textarea", "url"})
+SELECT_ROLES = frozenset({"combobox", "select"})
 # Tokenizers sometimes complete on their own hosts, so a submitted checkout may land there. Keep exact
 # hosts exact (notably Google) while allowing the dedicated payment-provider domains to use subdomains.
 PAYMENT_EXACT_HOSTS = frozenset({"checkout.stripe.com", "pay.google.com"})
@@ -35,6 +39,17 @@ PAYMENT_DOMAIN_HOSTS = frozenset({
 # would allow every unrelated co.uk site. This conservative rule may keep two related hosts separate on an
 # unusual registry; it must never collapse unrelated sites onto a public suffix.
 COUNTRY_SECOND_LEVELS = frozenset({"ac", "co", "com", "edu", "gov", "mil", "net", "org"})
+
+# Navigation may reveal a checkout's submit button before the model has returned READY_TO_PURCHASE. Keep
+# obvious payment/ordering controls unreachable in that phase so even a bad model reply cannot skip the
+# quote-bound confirmation boundary. False positives stop safely; they never broaden what may be clicked.
+PAYMENT_SUBMIT_PREFIXES = (
+  "pay", "make payment", "purchase", "buy now", "place order", "submit order", "submit payment",
+  "complete order", "complete payment", "complete purchase", "confirm and pay", "confirm order",
+  "confirm payment", "confirm purchase", "confirm reservation", "book now", "reserve now",
+)
+PAYMENT_WALLET_MARKERS = ("google pay", "googlepay", "g pay", "gpay", "apple pay", "paypal", "shop pay",
+                          "amazon pay")
 
 
 def registrable(host: str) -> str:
@@ -75,6 +90,13 @@ class ActionValidator:
 
   def observe(self, observation: Observation, phase: AgentPhase) -> None:
     """Count the step and notice when the loop has stopped getting anywhere."""
+    if not self.host_allowed(observation.host):
+      raise OffDomain(f"navigation left the allowed hosts at {observation.host}")
+    if "provider_verification_present" in observation.hints:
+      raise UserInterventionRequired(
+        "PROVIDER_VERIFICATION",
+        "complete the provider's browser verification manually, then retry; nothing was purchased",
+      )
     if "captcha_present" in observation.hints:
       raise UserInterventionRequired("CAPTCHA", "a human-verification challenge is blocking the checkout")
     self.steps += 1
@@ -91,8 +113,6 @@ class ActionValidator:
       else:
         self.same_screen = 0
         self._last_screen = observation.screen_hash
-    if not self.host_allowed(observation.host):
-      raise OffDomain(f"navigation left the allowed hosts at {observation.host}")
 
   def check(self, action: Action, observation: Observation, phase: AgentPhase) -> Action:
     allowed = ALLOWED_BY_PHASE.get(phase, frozenset())
@@ -101,8 +121,15 @@ class ActionValidator:
       raise _refusal(action, phase)
 
     if action.kind in NODE_ACTIONS or (action.kind == "FILL_SECRET" and action.nid):
-      if observation.node(action.nid) is None:
+      node = observation.node(action.nid)
+      if node is None:
         raise StaleNode(f"node {action.nid!r} is not on the current screen")
+      if action.kind == "TYPE" and node.role.lower() not in TEXT_ENTRY_ROLES:
+        raise InvariantDrift(f"refusing to type into a non-text {node.role or 'unknown'} control")
+      if action.kind == "FILL_PROFILE" and node.role.lower() not in TEXT_ENTRY_ROLES | SELECT_ROLES:
+        raise InvariantDrift(f"refusing to fill a non-form {node.role or 'unknown'} control")
+      if action.kind == "TAP" and phase is AgentPhase.NAVIGATING and _is_payment_submission(node):
+        raise InvariantDrift("refusing to submit payment before the quote-bound confirmation")
 
     if action.kind == "OPEN_URL":
       parsed = urlsplit(action.url)
@@ -160,7 +187,17 @@ class ActionValidator:
     """The last gate before the click. Exact equality only: a total that moved is a different purchase."""
     if registrable(observation.host) != quote.host:
       raise InvariantDrift(f"the checkout moved from {quote.host} to {observation.host}")
-    if quote.plate and quote.plate.upper() not in observation.text_digest.upper():
+    if quote.laz_location_id:
+      proof = laz_checkout_proof(observation.url, quote.laz_location_id)
+      frozen_interval = (quote.laz_start_unix_us, quote.laz_end_unix_us, quote.duration_seconds)
+      current_interval = (proof.start_unix_us, proof.end_unix_us, proof.duration_seconds)
+      if current_interval != frozen_interval:
+        raise InvariantDrift("the LAZ checkout interval changed after confirmation")
+      plate_fields = [node for node in observation.nodes if node.field_key == "parkerLicensePlate"]
+      if (len(plate_fields) != 1 or
+          _normalized_identifier(plate_fields[0].value) != _normalized_identifier(quote.plate)):
+        raise InvariantDrift("the LAZ checkout vehicle changed after confirmation")
+    elif quote.plate and quote.plate.upper() not in observation.text_digest.upper():
       raise InvariantDrift("the vehicle is no longer shown on the checkout")
     try:
       total_minor, currency = parse_total_minor(observation.text_digest, near=near)
@@ -178,3 +215,13 @@ def _refusal(action: Action, phase: AgentPhase) -> Exception:
   if action.kind in ("OPEN_URL", "BACK") and phase is AgentPhase.COMMITTING:
     return InvariantDrift("refusing to navigate away from the checkout the driver authorized")
   return AgentStuck(f"{action.kind} is not available while {phase.value}")
+
+
+def _is_payment_submission(node) -> bool:
+  label = " ".join(re.findall(r"[a-z0-9]+", f"{node.name} {node.value}".casefold()))
+  return (any(label == prefix or label.startswith(f"{prefix} ") for prefix in PAYMENT_SUBMIT_PREFIXES) or
+          any(marker in label for marker in PAYMENT_WALLET_MARKERS))
+
+
+def _normalized_identifier(value: str) -> str:
+  return "".join(character for character in value.casefold() if character.isalnum())

@@ -57,6 +57,7 @@ class Node:
   input_type: str = ""
   enabled: bool = True
   options: tuple[str, ...] = ()
+  field_key: str = ""
 
   def describe(self) -> dict[str, object]:
     """The model-facing view. Values are already redacted by the observation builder."""
@@ -87,7 +88,11 @@ class Observation:
   def screen_hash(self) -> str:
     """Identifies a screen by where it is and what can be done on it, so a spinner or a clock does not read
     as progress and a genuinely new page never reads as a loop."""
-    shape = "|".join(f"{node.role}:{node.name}" for node in self.nodes)
+    # Values may contain profile data, so hash only whether a control is filled. That is enough to recognize
+    # valid form progress without retaining or exposing the value itself.
+    shape = "|".join(
+      f"{node.role}:{node.field_key}:{node.name}:{'filled' if node.value else 'empty'}" for node in self.nodes
+    )
     return hashlib.sha256(f"{self.url}\n{shape}".encode()).hexdigest()
 
   def node(self, nid: str) -> Node | None:
@@ -107,6 +112,9 @@ class FrozenQuote:
   duration_seconds: int
   total_minor: int
   currency: str
+  laz_location_id: str = ""
+  laz_start_unix_us: int = 0
+  laz_end_unix_us: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +128,11 @@ class StepLog:
   model_ms: int = 0
   prompt_tokens: int = 0
   candidate_tokens: int = 0
+  thought_tokens: int = 0
   total_tokens: int = 0
+  finish_reason: str = ""
+  response_parts: int = 0
+  response_chars: int = 0
   screenshot_sent: bool = False
 
 
@@ -134,5 +146,6 @@ class AgentPolicy:
   max_total_minor: int = 3000
   allowed_hosts: frozenset[str] = frozenset()
   dry_run: bool = False
+  manual_verification_wait_s: int = 0
   redirect_hops: int = 5
   transcript: list[StepLog] = field(default_factory=list)

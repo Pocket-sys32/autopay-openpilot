@@ -9,7 +9,7 @@ from parking_backend.agent.diag import DiagnosticWriter
 from parking_backend.agent.loop import AgentLoop, Browser
 from parking_backend.agent.profile import AgentProfile
 from parking_backend.agent.secrets import SecretVault
-from parking_backend.agent.types import AgentPolicy, FrozenQuote
+from parking_backend.agent.types import AgentPolicy, FrozenQuote, InvariantDrift
 from parking_backend.provider import CheckoutSummary
 
 
@@ -34,12 +34,14 @@ class GenericAgentAdapter:
 
   def __init__(self, *, llm: LLMClient, vault: SecretVault, browser_factory: Callable[[], Browser],
                max_total_minor: int = 3000, dry_run: bool = False,
+               manual_verification_wait_s: int = 0,
                diagnostics: DiagnosticWriter | None = None):
     self.llm = llm
     self.vault = vault
     self.browser_factory = browser_factory
     self.max_total_minor = max_total_minor
     self.dry_run = dry_run
+    self.manual_verification_wait_s = manual_verification_wait_s
     self.diagnostics = diagnostics
 
   def validate_location(self, location_id: str) -> bool:
@@ -62,12 +64,17 @@ class GenericAgentAdapter:
     # Whichever cap is lower binds: the driver's setting on the device, or the operator's on this VM.
     cap = min(int(request.get("max_total_minor") or self.max_total_minor), self.max_total_minor)
     policy = AgentPolicy(allowed_hosts=frozenset({str(request.get("form_id") or "")}), max_total_minor=cap,
-                         dry_run=self.dry_run)
+                         dry_run=self.dry_run, manual_verification_wait_s=self.manual_verification_wait_s)
     browser = self.browser_factory()
     loop = AgentLoop(browser, self.llm, policy=policy, profile=AgentProfile.from_request(request),
                      vault=self.vault)
     try:
       summary, quote, near = loop.navigate(url)
+      expected_duration = int(request["duration_seconds"])
+      if summary.duration_seconds != expected_duration:
+        raise InvariantDrift(
+          f"checkout duration {summary.duration_seconds} does not match requested duration {expected_duration}"
+        )
     except BaseException as exc:
       self._write_diag(str(request.get("attempt_id") or "attempt"), "prepare_failed", policy.transcript,
                        type(exc).__name__)

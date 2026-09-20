@@ -17,8 +17,11 @@ MAX_OPTIONS = 24
 # Anything matching these is a payment field: it is masked in the digest and never given a nid, so the only
 # route to one is FILL_SECRET, which resolves it here rather than from a model-supplied reference.
 CARD_SELECTOR = ", ".join((
-  "[autocomplete^='cc-']", "input[type='password']", "[name*='card' i]", "[id*='card' i]",
+  "[autocomplete^='cc-']:not([autocomplete='cc-name'])", "input[type='password']",
+  "[name*='card' i]:not([name*='name' i]):not([name*='holder' i])",
+  "[id*='card' i]:not([id*='name' i]):not([id*='holder' i])",
   "[name*='cvv' i]", "[id*='cvv' i]", "[name*='cvc' i]", "[id*='cvc' i]",
+  "[name*='expir' i]", "[id*='expir' i]",
 ))
 
 INTERACTIVE = ", ".join((
@@ -31,36 +34,63 @@ HARVEST_JS = """
 const MAX = arguments[0], CARD = arguments[1], INTERACTIVE = arguments[2];
 document.querySelectorAll('[data-pa-nid]').forEach(e => e.removeAttribute('data-pa-nid'));
 const cards = new Set(Array.from(document.querySelectorAll(CARD)));
-const paymentFrames = Array.from(document.querySelectorAll('iframe')).filter(f =>
-  /(stripe|cardconnect|adyen|braintree|square|paypal)/i.test(f.src || '')).length;
+const frames = Array.from(document.querySelectorAll('iframe'));
+const paymentFrames = frames.filter(f => /(stripe|cardconnect|adyen|braintree|square|paypal)/i.test(f.src || '')).length;
+// An anchor iframe is present even when invisible reCAPTCHA has accepted the visitor. Only a visible bframe
+// is an actual challenge requiring a person.
+const captchaChallenge = frames.some(f => {
+  if (!/recaptcha\\/(api2|enterprise)\\/bframe/.test(f.src || '')) return false;
+  const box = f.getBoundingClientRect();
+  if (!box.width || !box.height) return false;
+  for (let e = f; e; e = e.parentElement) {
+    const s = getComputedStyle(e);
+    if (s.visibility === 'hidden' || s.display === 'none' || s.opacity === '0') return false;
+  }
+  return true;
+});
 const visible = (e) => {
   if (!e.getClientRects().length) return false;
   const s = window.getComputedStyle(e);
   return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
 };
 const label = (e) => {
-  let t = e.getAttribute('aria-label') || e.getAttribute('placeholder') || '';
-  if (!t && e.labels && e.labels.length) t = e.labels[0].innerText || '';
-  if (!t && e.id) { const l = document.querySelector(`label[for="${CSS.escape(e.id)}"]`); if (l) t = l.innerText || ''; }
-  if (!t) t = (e.innerText || e.value || e.getAttribute('name') || e.getAttribute('title') || '');
-  return (t || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
+  const clean = (v) => (v || '').replace(/\\s+/g, ' ').trim();
+  let t = clean(e.getAttribute('aria-label')) || clean(e.getAttribute('placeholder'));
+  if (!t && e.labels && e.labels.length) t = clean(e.labels[0].innerText);
+  if (!t && e.id) {
+    const l = document.querySelector(`label[for="${CSS.escape(e.id)}"]`);
+    if (l) t = clean(l.innerText);
+  }
+  if (!t) {
+    t = clean(e.innerText) || clean(e.value) || clean(e.getAttribute('name')) || clean(e.getAttribute('title'));
+  }
+  return t.slice(0, 120);
+};
+const fieldKey = (e) => {
+  const clean = (v) => (v || '').replace(/\\s+/g, ' ').trim();
+  return (clean(e.id) || clean(e.getAttribute('name')) || clean(e.getAttribute('autocomplete'))).slice(0, 120);
 };
 const out = [];
 let n = 0;
 for (const e of document.querySelectorAll(INTERACTIVE)) {
   if (out.length >= MAX) break;
   if (!visible(e) || cards.has(e)) continue;
+  const tag = e.tagName.toLowerCase();
+  const name = label(e);
+  // Generic focusable containers are often layout or framework artifacts. Without a label there is no
+  // defensible reason for the model to address one; native form controls remain visible by structure.
+  if (!name && !['input', 'select', 'textarea'].includes(tag)) continue;
   const nid = 'n' + (++n);
   e.setAttribute('data-pa-nid', nid);
-  const tag = e.tagName.toLowerCase();
   const node = {
     nid: nid,
     role: e.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'input' ? (e.type || 'textbox') : tag),
-    name: label(e),
+    name: name,
     value: (e.value == null ? '' : String(e.value)).slice(0, 120),
     input_type: (e.type || ''),
     enabled: !(e.disabled || e.getAttribute('aria-disabled') === 'true'),
     options: [],
+    field_key: fieldKey(e),
   };
   if (tag === 'select') {
     node.options = Array.from(e.options).slice(0, arguments[3]).map(o => (o.text || '').trim().slice(0, 64));
@@ -69,7 +99,7 @@ for (const e of document.querySelectorAll(INTERACTIVE)) {
 }
 const body = document.body ? (document.body.innerText || '') : '';
 return {nodes: out, text: body.slice(0, arguments[4]), title: document.title || '', url: location.href,
-        payment_fields: cards.size + paymentFrames};
+        payment_fields: cards.size + paymentFrames, captcha_challenge: captchaChallenge};
 """
 
 # Hide payment fields and every iframe before a screenshot, then put them back.
@@ -95,7 +125,8 @@ def harvest(driver, step: int, *, vault: SecretVault | None = None,
     Node(nid=str(item["nid"]), role=str(item.get("role") or ""), name=redact(str(item.get("name") or ""), vault),
          value=_safe_value(item, vault), input_type=str(item.get("input_type") or ""),
          enabled=bool(item.get("enabled", True)),
-         options=tuple(str(option) for option in (item.get("options") or ())))
+         options=tuple(str(option) for option in (item.get("options") or ())),
+         field_key=str(item.get("field_key") or ""))
     for item in (raw.get("nodes") or ())
   )
   url = str(raw.get("url") or driver.current_url)
@@ -103,7 +134,9 @@ def harvest(driver, step: int, *, vault: SecretVault | None = None,
     step=step, url=url, host=urlsplit(url).hostname or "", title=str(raw.get("title") or ""),
     nodes=nodes, text_digest=redact(str(raw.get("text") or ""), vault),
     screenshot_jpeg=capture(driver) if screenshot else None,
-    hints=detect_hints(str(raw.get("text") or ""), nodes, payment_fields=int(raw.get("payment_fields") or 0)),
+    hints=detect_hints(str(raw.get("text") or ""), nodes, title=str(raw.get("title") or ""),
+                       payment_fields=int(raw.get("payment_fields") or 0),
+                       captcha_challenge=bool(raw.get("captcha_challenge"))),
   )
 
 
@@ -135,11 +168,15 @@ def capture(driver) -> bytes | None:
       pass
 
 
-def detect_hints(text: str, nodes: tuple[Node, ...], *, payment_fields: int = 0) -> tuple[str, ...]:
+def detect_hints(text: str, nodes: tuple[Node, ...], *, title: str = "", payment_fields: int = 0,
+                 captcha_challenge: bool = False) -> tuple[str, ...]:
   """Deterministic notes about the screen, so the model is not the only thing that can spot a blocker."""
-  lowered = text.lower()
+  lowered = f"{title}\n{text}".lower()
   hints = []
-  if any(word in lowered for word in ("recaptcha", "i'm not a robot", "verify you are human", "captcha")):
+  if any(word in lowered for word in ("just a moment", "security verification")):
+    hints.append("provider_verification_present")
+  elif captcha_challenge or any(word in lowered for word in
+                                ("i'm not a robot", "verify you are human", "captcha challenge")):
     hints.append("captcha_present")
   if any(word in lowered for word in ("download the app", "open in app", "get the app", "continue in app")):
     hints.append("app_interstitial")

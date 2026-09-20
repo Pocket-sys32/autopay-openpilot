@@ -6,7 +6,7 @@ import unittest
 
 from parking_backend.config import Settings
 from parking_backend.gmail import EmailDeliveryUnknown
-from parking_backend.errors import CaptchaChallenged
+from parking_backend.errors import CaptchaChallenged, ProviderVerificationRequired
 from parking_backend.laz_adapter import PaymentDeclined
 from parking_backend.store import InvalidAttempt, ParkingStore
 from parking_backend.tests.test_store import request
@@ -175,6 +175,26 @@ class TestLazWorker(TestWorker):
     result = self.store.get_attempt("comma", "attempt-1")
     assert result is not None
     self.assertEqual((result["state"], result["reason_code"]), ("action_required", "CAPTCHA_CHALLENGED"))
+
+  def test_provider_verification_needs_the_user_and_buys_nothing(self):
+    class VerificationRequired(FakeAdapter):
+      def submit(self, payload, *, mark_submitting):
+        self.calls += 1
+        raise ProviderVerificationRequired("provider security check is still visible")
+
+    self.store.put_attempt("comma", laz_request(), now_ms=time.time_ns() // 1_000_000)
+    adapter = VerificationRequired()
+    Worker(self.settings, self.store, {"laz_ttp": adapter}, FakeEmail()).process_once()
+    result = self.store.get_attempt("comma", "attempt-1")
+    assert result is not None
+    self.assertEqual((result["state"], result["reason_code"]),
+                     ("action_required", "PROVIDER_VERIFICATION_REQUIRED"))
+    outcome = result["result"]
+    assert isinstance(outcome, dict)
+    self.assertFalse(outcome["demo"])
+    self.assertIn("manually", outcome["message"])
+    self.assertIn("Nothing was purchased", outcome["message"])
+    self.assertEqual(adapter.calls, 1)
 
   def test_laz_attempt_needs_the_provider_to_be_enabled(self):
     self.store.put_attempt("comma", laz_request(), now_ms=time.time_ns() // 1_000_000)

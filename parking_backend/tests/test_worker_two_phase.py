@@ -3,7 +3,7 @@ import tempfile
 import time
 import unittest
 
-from parking_backend.errors import PaymentDeclined
+from parking_backend.errors import PaymentDeclined, ProviderVerificationRequired
 from parking_backend.provider import CheckoutSummary
 from parking_backend.store import ParkingStore
 from parking_backend.tests.test_store import request
@@ -130,6 +130,27 @@ class TestTwoPhaseWorker(unittest.TestCase):
     self.decide("confirm")
     worker.process_once()
     self.assertEqual((self.attempt()["state"], self.attempt()["reason_code"]), ("failed", "PAYMENT_DECLINED"))
+    self.assertIsNone(worker.held)
+
+  def test_provider_verification_during_commit_needs_the_user_and_buys_nothing(self):
+    class VerificationRequired(FakeConfirmingAdapter):
+      def commit(self, _request, _session, *, mark_submitting):
+        self.committed += 1
+        raise ProviderVerificationRequired("provider security check is still visible")
+
+    adapter = VerificationRequired()
+    worker = self.worker(adapter)
+    worker.process_once()
+    self.decide("confirm")
+    worker.process_once()
+    attempt = self.attempt()
+    self.assertEqual((attempt["state"], attempt["reason_code"]),
+                     ("action_required", "PROVIDER_VERIFICATION_REQUIRED"))
+    outcome = attempt["result"]
+    assert isinstance(outcome, dict)
+    self.assertFalse(outcome["demo"])
+    self.assertIn("manually", outcome["message"])
+    self.assertIn("Nothing was purchased", outcome["message"])
     self.assertIsNone(worker.held)
 
   def test_a_crash_after_submitting_stays_unknown_and_is_never_retried(self):

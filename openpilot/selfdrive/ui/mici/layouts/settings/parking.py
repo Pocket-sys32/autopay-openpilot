@@ -210,12 +210,29 @@ class ParkingLayoutMici(NavScroller):
   def _save_plate(self, value: str):
     plate = normalize_plate(value)
     ui_state.params.put("ParkingLicensePlate", plate, block=True)
+    self._edit_region()
+
+  def _edit_region(self):
+    current = ui_state.params.get("ParkingPlateRegion") or ""
+    gui_app.push_widget(BigInputDialog(
+      "enter registration region...",
+      current,
+      text_validator=region_input_valid,
+      confirm_callback=self._save_region,
+    ))
+
+  def _save_region(self, value: str):
+    region = normalize_region(value)
+    if region:
+      ui_state.params.put("ParkingPlateRegion", region, block=True)
+    else:
+      ui_state.params.remove("ParkingPlateRegion")
     self._refresh_vehicle()
 
   def _refresh_vehicle(self):
     plate = ui_state.params.get("ParkingLicensePlate") or ""
     region = ui_state.params.get("ParkingPlateRegion") or ui_state.params.get("ParkingPlateCountry") or ""
-    self._vehicle_button.set_value(" · ".join(part for part in (plate, region) if part) or "Add license plate")
+    self._vehicle_button.set_value(" - ".join(part for part in (plate, region) if part) or "Add license plate")
 
   def _edit_payment_profile(self):
     first_name = ui_state.params.get("ParkingFirstName") or ""

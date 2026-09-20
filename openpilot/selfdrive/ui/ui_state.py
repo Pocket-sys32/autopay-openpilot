@@ -304,6 +304,8 @@ class Device:
     self._brightness_thread: threading.Thread | None = None
     self._brightness_event = threading.Event()
     self._brightness_target: int = 0
+    self._sleep_fade_started: float | None = None
+    self._sleep_fade_duration = 2.0
 
   @property
   def awake(self) -> bool:
@@ -370,6 +372,10 @@ class Device:
       clipped_brightness = float(np.interp(clipped_brightness, [0, 1], [30, 100]))
 
     brightness = round(self._brightness_filter.update(clipped_brightness))
+    if self._sleep_fade_started is not None and self._awake:
+      fade_elapsed = time.monotonic() - self._sleep_fade_started
+      fade_remaining = max(0.0, 1.0 - fade_elapsed / self._sleep_fade_duration)
+      brightness = round(brightness * fade_remaining)
     if not self._awake:
       brightness = 0
 
@@ -392,7 +398,16 @@ class Device:
         callback()
     self._prev_timed_out = interaction_timeout
 
-    self._set_awake(ui_state.ignition or ui_state.started or not interaction_timeout or PC)
+    should_awake = ui_state.ignition or ui_state.started or not interaction_timeout or PC
+    if should_awake:
+      self._sleep_fade_started = None
+      self._set_awake(True)
+    elif self._awake:
+      now = time.monotonic()
+      if self._sleep_fade_started is None:
+        self._sleep_fade_started = now
+      elif now - self._sleep_fade_started >= self._sleep_fade_duration:
+        self._set_awake(False)
 
   def _set_awake(self, on: bool):
     if on != self._awake:

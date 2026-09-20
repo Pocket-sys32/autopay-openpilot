@@ -13,7 +13,8 @@ from parking_backend.agent.llm import LLMUnavailable
 from parking_backend.agent.secrets import SecretVault
 from parking_backend.agent.types import (AgentStuck, DryRunStop, InvariantDrift, OffDomain,
                                          UserInterventionRequired)
-from parking_backend.errors import CaptchaChallenged, PaymentDeclined, PriceLimitExceeded, ReservationRejected
+from parking_backend.errors import (CaptchaChallenged, PaymentDeclined, PriceLimitExceeded,
+                                    ProviderVerificationRequired, ReservationRejected)
 from parking_backend.gmail import EmailDeliveryUnknown, GmailSender
 from parking_backend.provider import ConfirmingAdapter, ProviderAdapter
 from parking_backend.store import LAZ_PROVIDER_ID, ParkingStore
@@ -24,7 +25,8 @@ class AutomationTimeout(TimeoutError):
 
 
 def intervention_reason(code: str) -> str:
-  return "CAPTCHA_BLOCKED" if code == "CAPTCHA" else code
+  return {"CAPTCHA": "CAPTCHA_BLOCKED",
+          "PROVIDER_VERIFICATION": "PROVIDER_VERIFICATION_REQUIRED"}.get(code, code)
 
 
 def agent_vault(settings: Settings) -> SecretVault:
@@ -146,6 +148,10 @@ class Worker:
     elif isinstance(exc, CaptchaChallenged):
       self._release(held, "action_required", "CAPTCHA_CHALLENGED",
                     {"demo": False, "message": "reCAPTCHA challenged the checkout. Nothing was purchased."})
+    elif isinstance(exc, ProviderVerificationRequired):
+      self._release(held, "action_required", "PROVIDER_VERIFICATION_REQUIRED",
+                    {"demo": False,
+                     "message": "Complete the provider's browser verification manually, then retry. Nothing was purchased."})
     elif isinstance(exc, SubmissionUnknown) or submitted:
       self._release(held, "unknown", "AUTOMATION_INTERRUPTED_AFTER_SUBMIT",
                     {"demo": False, "message": "The payment result is unknown; it was not retried."})
@@ -220,6 +226,12 @@ class Worker:
       # Raised before PAY: nothing was purchased and a person can clear the challenge.
       self.store.complete(attempt_id, "action_required", "CAPTCHA_CHALLENGED",
                           {"demo": False, "message": "reCAPTCHA challenged the checkout. Nothing was purchased."})
+    except ProviderVerificationRequired:
+      self.store.complete(
+        attempt_id, "action_required", "PROVIDER_VERIFICATION_REQUIRED",
+        {"demo": False,
+         "message": "Complete the provider's browser verification manually, then retry. Nothing was purchased."},
+      )
     except UserInterventionRequired as exc:
       self.store.complete(attempt_id, "action_required", intervention_reason(exc.code),
                           {"demo": False, "message": str(exc)})
@@ -304,6 +316,7 @@ def main() -> None:
       browser_factory=lambda: DriverSession(settings.appium_url, vault=vault),
       max_total_minor=settings.agent_max_total_minor,
       dry_run=settings.agent_dry_run,
+      manual_verification_wait_s=settings.agent_manual_verification_wait_s,
       diagnostics=DiagnosticWriter(settings.agent_diag_dir, vault=vault),
     )
   worker = Worker(

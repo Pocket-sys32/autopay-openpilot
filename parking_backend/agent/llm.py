@@ -13,7 +13,6 @@ from typing import Protocol
 
 import requests
 
-
 # The VM already reaches the metadata server for Secret Manager, so ADC works here with no extra key.
 _METADATA_ROOT = "http://metadata.google.internal/computeMetadata/v1"
 METADATA_TOKEN_URL = f"{_METADATA_ROOT}/instance/service-accounts/default/token"
@@ -21,6 +20,39 @@ METADATA_PROJECT_URL = f"{_METADATA_ROOT}/project/project-id"
 METADATA_HEADERS = {"Metadata-Flavor": "Google"}
 DEFAULT_MODEL = "gemini-2.5-flash"
 DEFAULT_LOCATION = "us-west1"
+
+
+_INTEGER_FIELDS = frozenset({"seconds", "duration_seconds", "total_minor"})
+
+
+def _action_schema(action: str, *, required: tuple[str, ...] = (), optional: tuple[str, ...] = ()) -> dict:
+  fields = (*required, *optional, "why")
+  properties = {"action": {"type": "string", "enum": [action]}}
+  properties.update({name: {"type": "integer" if name in _INTEGER_FIELDS else "string"} for name in fields})
+  return {"type": "object", "properties": properties, "required": ["action", *required],
+          "additionalProperties": False, "propertyOrdering": ["action", *fields]}
+
+
+# JSON mode without a schema is only a formatting hint. This discriminated union makes every variant carry
+# only its own fields; the existing parser and deterministic validator remain the final authority over whether
+# that action is legal for the current page and phase.
+ACTION_RESPONSE_JSON_SCHEMA = {"anyOf": [
+  _action_schema("OPEN_URL", required=("url",)),
+  _action_schema("TAP", required=("nid",)),
+  _action_schema("TYPE", required=("nid",), optional=("text",)),
+  _action_schema("SELECT", required=("nid", "option_text")),
+  _action_schema("SCROLL", required=("direction",), optional=("nid",)),
+  _action_schema("BACK"),
+  _action_schema("WAIT", optional=("seconds", "for")),
+  _action_schema("FILL_PROFILE", required=("nid", "field")),
+  _action_schema("FILL_SECRET", required=("slot",), optional=("nid",)),
+  _action_schema("INSTALL_APP", required=("package",)),
+  _action_schema("REQUEST_USER", required=("code",), optional=("message",)),
+  _action_schema("READY_TO_PURCHASE", required=("merchant", "pay_nid"),
+                 optional=("location_label", "plate", "duration_seconds", "total_minor", "currency")),
+  _action_schema("DONE", required=("outcome",), optional=("evidence_text",)),
+  _action_schema("ERROR", required=("code",), optional=("message",)),
+]}
 
 
 class LLMClient(Protocol):
@@ -36,7 +68,11 @@ class ModelTelemetry:
   elapsed_ms: int = 0
   prompt_tokens: int = 0
   candidate_tokens: int = 0
+  thought_tokens: int = 0
   total_tokens: int = 0
+  finish_reason: str = ""
+  response_parts: int = 0
+  response_chars: int = 0
 
 
 class VertexGeminiClient:
@@ -97,7 +133,11 @@ class VertexGeminiClient:
       "systemInstruction": {"parts": [{"text": system}]},
       "contents": [{"role": "user", "parts": parts}],
       # One action per turn, as JSON. Temperature 0 so the same screen gives the same move.
-      "generationConfig": {"temperature": 0, "maxOutputTokens": 512, "responseMimeType": "application/json"},
+      "generationConfig": {"temperature": 0, "maxOutputTokens": 512, "responseMimeType": "application/json",
+                           "responseJsonSchema": ACTION_RESPONSE_JSON_SCHEMA,
+                           # A bounded one-action classifier does not need Gemini's dynamic reasoning, which
+                           # otherwise consumes the same output budget needed for the JSON action itself.
+                           "thinkingConfig": {"thinkingBudget": 0}},
     }
     try:
       response = self.session.post(endpoint, json=body, timeout=self.timeout_seconds,
@@ -107,17 +147,30 @@ class VertexGeminiClient:
     except (requests.RequestException, ValueError) as exc:
       raise LLMUnavailable(f"vertex request failed: {type(exc).__name__}") from exc
     usage = payload.get("usageMetadata") or {}
+    candidates = payload.get("candidates") or []
+    candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
+    finish_reason = str(candidate.get("finishReason") or "")
+    content = candidate.get("content") if isinstance(candidate.get("content"), dict) else {}
+    parts = content.get("parts") if isinstance(content, dict) else []
+    parts = parts if isinstance(parts, list) else []
+    texts = [part.get("text") for part in parts
+             if isinstance(part, dict) and isinstance(part.get("text"), str) and not part.get("thought")]
+    answer = "".join(texts)
     self.last_telemetry = ModelTelemetry(
       elapsed_ms=(_time.monotonic_ns() - started) // 1_000_000,
       prompt_tokens=int(usage.get("promptTokenCount") or 0),
       candidate_tokens=int(usage.get("candidatesTokenCount") or 0),
+      thought_tokens=int(usage.get("thoughtsTokenCount") or 0),
       total_tokens=int(usage.get("totalTokenCount") or 0),
+      finish_reason=finish_reason[:32], response_parts=len(parts), response_chars=len(answer),
     )
-    try:
-      return payload["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError, TypeError) as exc:
-      blocked = json.dumps(payload)[:200]
-      raise LLMUnavailable(f"vertex returned no usable candidate: {blocked}") from exc
+    if finish_reason and finish_reason != "STOP":
+      raise LLMUnavailable(f"vertex candidate stopped with {finish_reason}")
+    if not answer:
+      block_reason = str((payload.get("promptFeedback") or {}).get("blockReason") or "")
+      suffix = f": {block_reason}" if block_reason else ""
+      raise LLMUnavailable(f"vertex returned no usable candidate{suffix}")
+    return answer
 
 
 class ScriptedLLM:

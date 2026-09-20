@@ -16,5 +16,9 @@ class CaptchaChallenged(FormChanged):
   FormChanged; raising it before PAY is clicked keeps it a state in which nothing was purchased."""
 
 
+class ProviderVerificationRequired(FormChanged):
+  """The provider's security check needs a person. This is raised before payment, so nothing was purchased."""
+
+
 class PriceLimitExceeded(FormChanged):
   """The live checkout total is above an independently configured spending ceiling."""

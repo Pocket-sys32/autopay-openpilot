@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime
 import math
 import random
 import time
@@ -13,7 +12,7 @@ from openpilot.system.ui.widgets.layouts import HBoxLayout
 from openpilot.system.ui.widgets.icon_widget import IconWidget
 from openpilot.system.ui.widgets.label import UnifiedLabel, gui_label
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, TextAlignment, TextAlignmentVertical
-from openpilot.system.ui.lib.theme import ACCENT, TEXT, TEXT_DIM, TEXT_MUTED, Rgb, rgba
+from openpilot.system.ui.lib.theme import ACCENT, TEXT, rgba
 from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
 
 HOME_PADDING = 8
@@ -130,8 +129,6 @@ class MiciHomeLayout(Widget):
     self._did_long_press = False
     self._is_pressed_prev = False
 
-    self._version_text = self._get_version_text()
-
     self._experimental_icon = IconWidget("icons_mici/experimental_mode.png", (48, 48))
     self._usb_icon = IconWidget("icons_mici/usb.png", (62, 40))
     self._chestnut_icon = IconWidget("icons_mici/chestnut_green.png", (54, 40))
@@ -154,9 +151,10 @@ class MiciHomeLayout(Widget):
       self._mic_icon,
     ], spacing=18)
 
-    self._pay_label = UnifiedLabel("Pay", font_size=88, text_color=rgba(ACCENT),
-                                   font_weight=FontWeight.DISPLAY, max_width=480, wrap_text=False)
-    self._pilot_label = UnifiedLabel("Pilot", font_size=88, font_weight=FontWeight.DISPLAY, max_width=480, wrap_text=False)
+    self._typing_label = UnifiedLabel("", font_size=72, text_color=rgba(ACCENT),
+                                      font_weight=FontWeight.DISPLAY, max_width=480, wrap_text=False)
+    self._typing_second_label = UnifiedLabel("", font_size=72, text_color=rgba(TEXT),
+                                             font_weight=FontWeight.DISPLAY, max_width=480, wrap_text=False)
     # Pick scattered positions once. Favor open space, including across the
     # vertical wrap boundary, so the moving symbols do not form rows or clumps.
     rng = random.Random(42)
@@ -168,11 +166,6 @@ class MiciHomeLayout(Widget):
         for x, y in self._dollar_positions
       )) if self._dollar_positions else candidates[0]
       self._dollar_positions.append(position)
-    self._version_label = UnifiedLabel("", font_size=28, text_color=rgba(TEXT_MUTED),
-                                       font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
-    self._large_version_label = UnifiedLabel("", font_size=64, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
-    self._date_label = UnifiedLabel("", font_size=28, text_color=rgba(TEXT_DIM),
-                                    font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
     self._intro_started = rl.get_time()
 
   def _update_state(self):
@@ -211,21 +204,6 @@ class MiciHomeLayout(Widget):
         self._on_settings_click()
     self._did_long_press = False
 
-  def _get_version_text(self) -> tuple[str, str] | None:
-    version = ui_state.params.get("Version")
-    if not version:
-      return None
-
-    commit_date_raw = ui_state.params.get("GitCommitDate")
-    try:
-      # GitCommitDate format from get_commit_date(): '%ct %ci' e.g. "'1708012345 2024-02-15 ...'"
-      unix_ts = int(commit_date_raw.strip("'").split()[0])
-      date_str = datetime.datetime.fromtimestamp(unix_ts).strftime("%b %d")
-    except (ValueError, IndexError, TypeError, AttributeError):
-      date_str = ""
-
-    return version, date_str
-
   def _draw_dollar_background(self):
     """Float a fixed set of soft green symbols behind the home-page content."""
     font = gui_app.font(FontWeight.DISPLAY)
@@ -243,64 +221,42 @@ class MiciHomeLayout(Widget):
       rl.draw_text_ex(font, "$", rl.Vector2(self.rect.x + x, self.rect.y + y),
                       size, 0, rgba(ACCENT, opacity))
 
-  def _draw_liquid_label(self, label: UnifiedLabel, position: rl.Vector2, color: Rgb,
-                         progress: float, phase: float) -> None:
-    """Reveal a label from the bottom with a low-cost, gently rippled waterline."""
-    label.set_position(position.x, position.y)
-    if progress >= 0.999:
-      label.set_text_color(rgba(color))
-      label.render()
-      return
-
-    # Keep the unfilled letterforms barely visible while the color rises through them.
-    label.set_text_color(rgba(color, 42))
-    label.render()
-    label.set_text_color(rgba(color))
-
-    strip_count = 10
-    strip_width = max(1.0, label.text_width / strip_count)
-    label_height = label.font_size + 6
-    bottom = position.y + label_height
-    elapsed = rl.get_time()
-    for index in range(strip_count):
-      strip_x = position.x + index * strip_width
-      wave = math.sin(elapsed * 5.0 + phase + index * 0.72) * 3.0
-      waterline = max(position.y, min(bottom, bottom - progress * label_height + wave))
-      rl.begin_scissor_mode(int(strip_x), int(waterline), math.ceil(strip_width) + 1,
-                            max(1, math.ceil(bottom - waterline)))
-      label.render()
-      rl.end_scissor_mode()
-
   def _render(self, _):
     self._draw_dollar_background()
-    intro_elapsed = rl.get_time() - self._intro_started
+    cycle_elapsed = (rl.get_time() - self._intro_started) % 8.0
+    phrase_elapsed = cycle_elapsed % 4.0
+    suffix = " parking" if cycle_elapsed < 4.0 else " pilot"
+    full_text = "Pay" + suffix
+    if phrase_elapsed < 1.6:
+      visible_count = min(len(full_text), int(phrase_elapsed / 1.6 * (len(full_text) + 1)))
+    elif phrase_elapsed < 3.15:
+      visible_count = len(full_text)
+    else:
+      visible_count = max(0, len(full_text) - int((phrase_elapsed - 3.15) / 0.85 * (len(full_text) + 1)))
 
-    def reveal(delay: float) -> float:
-      progress = max(0.0, min(1.0, (intro_elapsed - delay) / 1.05))
-      return progress * progress * (3.0 - 2.0 * progress)
+    # Measure the completed phrase first so typing remains anchored at the same
+    # centered position instead of shifting as each character appears.
+    self._typing_label.set_text("Pay")
+    pay_width = self._typing_label.text_width
+    self._typing_second_label.set_text(suffix)
+    suffix_width = self._typing_second_label.text_width
+    start_x = self.rect.x + (self.rect.width - pay_width - suffix_width) / 2
+    text_y = self.rect.y + 42
 
-    pay_reveal = reveal(0.0)
-    pilot_reveal = reveal(0.07)
-    metadata_reveal = reveal(0.48)
+    pay_text = "Pay"[:min(3, visible_count)]
+    suffix_text = suffix[:max(0, visible_count - 3)]
+    self._typing_label.set_text(pay_text)
+    self._typing_label.set_position(start_x, text_y)
+    self._typing_label.set_text_color(rgba(ACCENT))
+    self._typing_label.render()
+    self._typing_second_label.set_text(suffix_text)
+    self._typing_second_label.set_position(start_x + pay_width, text_y)
+    self._typing_second_label.set_text_color(rgba(TEXT))
+    self._typing_second_label.render()
 
-    # TODO: why is there extra space here to get it to be flush?
-    text_pos = rl.Vector2(self.rect.x - 2 + HOME_PADDING, self.rect.y - 4)
-    self._draw_liquid_label(self._pay_label, text_pos, ACCENT, pay_reveal, 0.0)
-    pilot_pos = rl.Vector2(text_pos.x + self._pay_label.text_width, text_pos.y)
-    self._draw_liquid_label(self._pilot_label, pilot_pos, TEXT, pilot_reveal, 1.4)
-
-    if self._version_text is not None:
-      version_pos = rl.Rectangle(text_pos.x + 4, text_pos.y + self._pay_label.font_size + 10, 100, 36)
-      self._version_label.set_text(self._version_text[0])
-      self._version_label.set_text_color(rgba(TEXT_MUTED, round(255 * metadata_reveal)))
-      self._version_label.set_position(version_pos.x, version_pos.y + 8 * (1.0 - metadata_reveal))
-      self._version_label.render()
-
-      self._date_label.set_text("  ·  " + self._version_text[1])
-      self._date_label.set_text_color(rgba(TEXT_DIM, round(255 * metadata_reveal)))
-      self._date_label.set_position(version_pos.x + self._version_label.text_width + 10,
-                                    version_pos.y + 8 * (1.0 - metadata_reveal))
-      self._date_label.render()
+    if int(cycle_elapsed * 4) % 2 == 0:
+      cursor_x = start_x + self._typing_label.text_width + self._typing_second_label.text_width + 4
+      rl.draw_rectangle(round(cursor_x), round(text_y + 7), 3, 54, rgba(TEXT, 220))
 
     # ***** Center-aligned bottom section icons *****
     usb_connected = ui_state.usb_connected

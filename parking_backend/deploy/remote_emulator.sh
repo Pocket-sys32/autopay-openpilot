@@ -4,6 +4,7 @@
 #
 #   ./remote_emulator.sh            stop the worker, mirror the emulator, restart the worker on exit
 #   ./remote_emulator.sh --signin   the same, but open accounts.google.com on the device first
+#   ./remote_emulator.sh --live     keep the worker running for an explicitly configured manual wait
 #   ./remote_emulator.sh --status   report VM services, the emulator and the signed-in accounts, then exit
 #
 # The Google sign-in itself stays manual on purpose: Google refuses a WebDriver-controlled session with
@@ -61,11 +62,18 @@ if test -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}"; then
   exit 1
 fi
 
-# Only restart the worker on exit if it was actually running when we started.
+# Only restart the worker on exit if this script actually stopped it.
 worker_was_active=$(on_vm 'systemctl is-active parking-worker' 2>/dev/null || true)
-if test "$worker_was_active" = active; then
+worker_stopped=0
+if test "$worker_was_active" = active && test "${1:-}" != --live; then
   printf 'Stopping parking-worker so no attempt runs while you are in the emulator.\n'
   on_vm 'sudo systemctl stop parking-worker'
+  worker_stopped=1
+elif test "$worker_was_active" = active; then
+  printf 'Leaving parking-worker running for the bounded manual-verification wait.\n'
+elif test "${1:-}" = --live; then
+  printf 'parking-worker is not active; refusing to open a live intervention window.\n' >&2
+  exit 1
 fi
 
 restore() {
@@ -74,7 +82,7 @@ restore() {
     kill "$tunnel" 2>/dev/null || true
   fi
   printf '\nGoogle accounts on the device now: %s\n' "$(account_count 2>/dev/null || echo unknown)"
-  if test "$worker_was_active" = active; then
+  if test "$worker_stopped" -eq 1; then
     printf 'Restarting parking-worker.\n'
     on_vm 'sudo systemctl start parking-worker' || printf 'Could not restart parking-worker; do it by hand.\n' >&2
   fi
@@ -107,6 +115,8 @@ if test "${1:-}" = --signin; then
   "$adb" -s "$serial" shell am start -a android.intent.action.VIEW -d https://accounts.google.com/ >/dev/null 2>&1 \
     || printf 'Could not open the sign-in page; browse to accounts.google.com by hand.\n' >&2
   printf 'Opened accounts.google.com on the device. Sign in there, then check with --status.\n'
+elif test "${1:-}" = --live; then
+  printf 'Keep this window open. Complete only the displayed verification; the backend dry run will not click PAY.\n'
 else
   printf 'In the device: Settings -> Passwords & accounts -> Add account -> Google, then sign in to Chrome.\n'
 fi

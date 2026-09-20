@@ -40,6 +40,7 @@ class Settings:
   agent_keepalive_s: int = 20
   agent_max_total_minor: int = 3000
   agent_dry_run: bool = False
+  agent_manual_verification_wait_s: int = 0
   agent_model: str = "gemini-2.5-flash"
   agent_location: str = "us-west1"
   agent_card_number: str = ""
@@ -79,6 +80,7 @@ class Settings:
       agent_max_total_minor=int(os.getenv("PARKING_AGENT_MAX_TOTAL_MINOR", "3000")),
       # Stops before the pay click; how a real merchant is exercised without buying anything.
       agent_dry_run=os.getenv("PARKING_AGENT_DRY_RUN", "0") == "1",
+      agent_manual_verification_wait_s=int(os.getenv("PARKING_AGENT_MANUAL_VERIFICATION_WAIT_S", "0")),
       agent_model=os.getenv("PARKING_AGENT_MODEL", "gemini-2.5-flash"),
       agent_location=os.getenv("PARKING_AGENT_LOCATION", "us-west1"),
       # The agent's own card, kept separate from the LAZ one so enabling it is a deliberate act.

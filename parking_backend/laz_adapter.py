@@ -9,7 +9,8 @@ import time
 import requests
 
 from parking_backend.appium_adapter import CHROMEDRIVER_PATH, FormChanged, SubmissionUnknown
-from parking_backend.errors import CaptchaChallenged, PaymentDeclined, PriceLimitExceeded, ReservationRejected
+from parking_backend.errors import (CaptchaChallenged, PaymentDeclined, PriceLimitExceeded,
+                                    ProviderVerificationRequired, ReservationRejected)
 
 
 LOCATION_ID = "143245"
@@ -25,6 +26,7 @@ DECLINE_MARKERS = ("declined", "unsuccessful", "could not be processed", "card w
 # LAZ's checkout shows this toast and stays on the form. The card issuer reported no decline, so this is a
 # rejection of the reservation itself, not a card decline.
 RESERVATION_MARKERS = ("could not validate reservation",)
+PROVIDER_VERIFICATION_MARKERS = ("just a moment", "verify you are human", "security verification")
 PRICE_RE = re.compile(r"PAY\s*\$\s*(\d+(?:\.\d{2})?)")
 # Pages loaded before the checkout so it is not reached from a browser with an empty cookie jar. google.com is
 # the one that matters: that is where a signed-in session's cookies live, and reCAPTCHA reads them from its own
@@ -96,6 +98,12 @@ def is_decline(page_text: str) -> bool:
   return any(marker in lowered for marker in DECLINE_MARKERS)
 
 
+def is_provider_verification(page_title: str, page_text: str) -> bool:
+  """Classify a provider interstitial only after the expected entry control failed to appear."""
+  lowered = f"{page_title}\n{page_text}".casefold()
+  return any(marker in lowered for marker in PROVIDER_VERIFICATION_MARKERS)
+
+
 class LazAdapter:
   """Appium adapter for one allowlisted LAZ location, driven through a real Android Chrome."""
 
@@ -114,6 +122,12 @@ class LazAdapter:
                         if configured is not None else DEFAULT_WARMUP_URLS)
     self.warmup_budget = int(os.getenv("PARKING_LAZ_WARMUP_BUDGET", "30"))
     self.attach_to_chrome = os.getenv("PARKING_LAZ_ATTACH_CHROME", "1") == "1"
+    # Cloudflare occasionally leaves the browser on its interstitial even after the
+    # verification request has completed. Refreshing the same page can pick up the
+    # clearance cookie. Keep this bounded so a provider outage cannot hold the
+    # single Appium session forever.
+    self.verification_refreshes = max(0, int(os.getenv("PARKING_LAZ_VERIFICATION_REFRESHES", "6")))
+    self.verification_wait_s = max(5, int(os.getenv("PARKING_LAZ_VERIFICATION_WAIT_S", "15")))
 
   def validate_location(self, location_id: str) -> bool:
     return location_id == LOCATION_ID
@@ -189,15 +203,27 @@ class LazAdapter:
             pass  # cookies for other domains cannot be set on this page
         driver.get(ENTRY_URL)
       self._stamp = time.strftime("%Y%m%dT%H%M%S")
-      for reload_left in (1, 0):  # Cloudflare's verification page sometimes sticks until the page is reloaded
+      for refresh_number in range(self.verification_refreshes + 1):
         try:
-          self._wait(lambda: driver.execute_script("return !!document.getElementById('buyNowSearch')"), "GO button", timeout=30)
+          self._wait(lambda: driver.execute_script("return !!document.getElementById('buyNowSearch')"),
+                     "GO button", timeout=self.verification_wait_s)
           break
-        except FormChanged:
-          self._snapshot(driver, "0-no-go-button")
-          if not reload_left:
-            raise
-          driver.get(ENTRY_URL)
+        except FormChanged as exc:
+          self._snapshot(driver, f"0-no-go-button-{refresh_number}")
+          verification = self._provider_verification_required(driver)
+          if verification and refresh_number < self.verification_refreshes:
+            driver.refresh()
+            time.sleep(2)
+            continue
+          if verification:
+            raise ProviderVerificationRequired(
+              "LAZ verification did not clear after bounded refresh retries in the existing Chrome profile") from exc
+          # Preserve the previous single retry for an ordinary slow or incomplete
+          # page load, but do not repeatedly refresh an unknown page.
+          if refresh_number == 0:
+            driver.get(ENTRY_URL)
+            continue
+          raise
       if SITE_CODE not in driver.find_element(By.TAG_NAME, "body").text:
         raise FormChanged("unexpected LAZ location")
       if urlparse_host(driver.current_url) != CHECKOUT_HOST:
@@ -295,6 +321,20 @@ class LazAdapter:
       return False  # a detection failure must not invent a challenge
 
   @staticmethod
+  def _provider_verification_required(driver) -> bool:
+    """Recognise the entry-page verification without clicking or attempting to complete it."""
+    try:
+      title = str(driver.title or "")
+    except Exception:
+      title = ""
+    try:
+      from selenium.webdriver.common.by import By
+      page_text = str(driver.find_element(By.TAG_NAME, "body").text or "")
+    except Exception:
+      page_text = ""
+    return is_provider_verification(title, page_text)
+
+  @staticmethod
   def _wait(predicate, what: str, timeout: int = 30):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -352,7 +392,14 @@ class LazAdapter:
         if len(found) != 1:
           self._write_card_log(log + [f"{key}: expected one {selector}, found {len(found)}"])
           raise FormChanged(f"card {key} field was not found")
-        found[0].click()
+        # A mobile CardConnect iframe can briefly retain a transparent overlay
+        # while its tokenizer finishes loading. Selenium's physical click then
+        # raises ElementClickInterceptedException even though the input is
+        # present and writable. Focus it through the DOM instead; send_keys
+        # still uses the normal input path and the digit checks below prove the
+        # tokenizer accepted the value.
+        driver.execute_script(
+          "arguments[0].scrollIntoView({block:'center',inline:'nearest'}); arguments[0].focus();", found[0])
         found[0].send_keys(values[key])  # no clear(): the fields start empty and clearing may reset the tokenizer
         typed = self._card_digits(driver, selector)
         log.append(f"{key}: digits right after typing = {typed}")

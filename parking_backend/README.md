@@ -72,6 +72,7 @@ Both scripts run on your workstation, not on the VM:
 gcloud auth login                   # only if gcloud is not signed in yet
 ./deploy/remote_emulator.sh --status   # services, emulator, and how many Google accounts are on the device
 ./deploy/remote_emulator.sh            # mirror the emulator
+./deploy/remote_emulator.sh --live     # mirror it without stopping a worker that is waiting for you
 ```
 
 `remote_emulator.sh` stops `parking-worker` so no attempt runs mid-session, tunnels the emulator's loopback adb
@@ -79,6 +80,10 @@ port over SSH, mirrors the screen with scrcpy, and on exit disconnects, reports 
 the worker if it had been running. In the mirrored device: Settings -> Passwords & accounts -> Add account ->
 Google, then open Chrome and pick the same account. The AVD uses the `google_apis_playstore` image, so this is
 the real Play Services sign-in and 2FA prompts work normally.
+
+`--live` is the exception: it leaves the worker running so a person can clear a displayed provider verification
+during the bounded dry-run wait described below. Use that mode only while an explicitly authorised dry run is
+active, and interact only with the verification prompt—not checkout fields or PAY.
 
 The scripts default to `parking-demo-vm` in `fieldscout-497018`/`us-west1-b`; override with `PARKING_VM_INSTANCE`,
 `PARKING_VM_PROJECT` and `PARKING_VM_ZONE`. The emulator is on `parking-demo-vm`, not on `instance1`, which is an
@@ -101,31 +106,23 @@ matching the solver's user agent requires the relaunch that wipes the session �
 the Google session is lost. The command-line arguments above are not applied while attached either, but
 `navigator.webdriver` stays false regardless, precisely because chromedriver did not launch the browser.
 
-**The deployed VM currently sets `PARKING_LAZ_INJECT_CF_COOKIES=1`**, so attaching never engages there and
-every attempt runs signed out — the warm-up log says `google session cookie present: no` even right after a
-successful manual sign-in. The two are worth measuring against each other: attached, and with no solver
-involved, the browser cleared Cloudflare by itself in one of the two probes run that way and reached the
-checkout form, while keeping the Google session that reCAPTCHA reads. Two probes is not enough to choose on,
-so measure it before switching; `PARKING_LAZ_INJECT_CF_COOKIES=0` is what switches to it.
+Treat attach and relaunch as distinct operating modes, not interchangeable fallbacks.
+`PARKING_LAZ_INJECT_CF_COOKIES=1` selects the solver-cookie relaunch path and therefore does not preserve the
+signed-in profile. `PARKING_LAZ_INJECT_CF_COOKIES=0` with `PARKING_LAZ_ATTACH_CHROME=1` selects the existing
+Chrome profile. Record the selected mode with each diagnostic run instead of documenting a live VM setting
+here, because deployment overrides change independently of the code.
 
-The two gates are separate and want different things. Cloudflare, on the entry page, issues `cf_clearance` from
-IP reputation and browser fingerprint and never reads the Google session. reCAPTCHA, at the checkout, is the one
-a signed-in Google account helps: it reads google.com's cookies from its own iframe, and scores a browser with a
-real session far above an anonymous one.
+## Provider verification and reCAPTCHA
 
-## reCAPTCHA at the checkout
+Cloudflare's entry-page verification and checkout reCAPTCHA are separate gates. A Google account or unrelated
+browsing history is not evidence that either gate will pass, and artificially visiting unrelated sites is not
+a supported recovery step. Preserve the user's ordinary Chrome profile, but leave every displayed verification
+for a person to complete.
 
-Three things work on the checkout's reCAPTCHA score, in descending order of effect:
-
-1. The signed-in Google account above. This is the large one.
-2. Warming the profile. Before the checkout, `LazAdapter` loads `DEFAULT_WARMUP_URLS` — google.com, which is
-   where the session cookies live and is the only one that really counts, then wikipedia.org and LAZ's own
-   homepage, which is where a person would normally have started. Set `PARKING_LAZ_WARMUP_URLS` to a
-   comma-separated list to change it, or to the empty string to switch warming off; `PARKING_LAZ_WARMUP_BUDGET`
-   (default 30 s) caps the whole warm-up so a slow site cannot eat the worker's deadline. A warm-up failure is
-   logged and ignored: it is not the purchase. The worker's per-attempt deadline is 180 s to allow for this.
-3. Chrome now launches with `--disable-blink-features=AutomationControlled`. Chromedriver otherwise leaves
-   `navigator.webdriver` set, which reCAPTCHA reads.
+The current adapter still performs its bounded pre-navigation sequence and writes a warm-up diagnostic. That
+file is useful only for confirming which pages loaded and whether the selected Chrome profile contains a Google
+web session; it does not establish trust or predict a CAPTCHA outcome. `PARKING_LAZ_WARMUP_BUDGET` (default
+30 s) prevents a slow page from consuming the worker deadline.
 
 Each run writes `<stamp>-0-warmup.txt` into `PARKING_DIAG_DIR`, recording which sites loaded and whether a
 Google session cookie was present. That file is how you confirm the sign-in actually reached Chrome; it records
@@ -147,9 +144,11 @@ Settings -> Google services.
 
 ### Checking it without buying anything
 
-`deploy/probe_browser.py` opens a session exactly as `LazAdapter` would, warms it, and reports the cookie
-state, `navigator.webdriver`, whether Cloudflare passed and which reCAPTCHA frames are present. It fills no
-field and never clicks PAY. Copy the package somewhere readable and run it on the VM as `parking-demo`:
+`deploy/probe_browser.py` attaches to the existing profile by default and reports the browser mode, cookie-name
+state, whether the LAZ GO button appeared, and which reCAPTCHA frames are present. It does not call FlareSolverr
+or inject solver cookies or a solver user agent. It fills no field and never clicks PAY, but it is still a live
+anti-abuse probe: run it once for an explicitly authorised diagnosis, not as a poller. Copy the package somewhere
+readable and run it on the VM as `parking-demo`:
 
 ```bash
 PYTHONPATH=/tmp/proberoot PARKING_DIAG_DIR=/tmp/probe-diag \
@@ -159,11 +158,14 @@ PYTHONPATH=/tmp/proberoot PARKING_DIAG_DIR=/tmp/probe-diag \
 `PARKING_PROBE_CHECKOUT=1` also walks GO -> NEXT to the checkout form and reports the frames there. Note that
 an invisible reCAPTCHA is only evaluated when PAY is clicked, so a clean report is encouraging but not proof.
 
-A visible challenge is now recognised rather than left to time out. Before PAY it raises `CaptchaChallenged`,
-which the worker records as `action_required` / `CAPTCHA_CHALLENGED` with nothing purchased, and snapshots
-`0-recaptcha-before-pay`. After PAY the result is genuinely ambiguous, so it stays `unknown` — it is only
-snapshotted as `5-recaptcha-after-pay` and noted in the message. Clear a challenge by hand with
-`remote_emulator.sh`; the cleared state lives in the same persistent profile.
+A full `laz_ttp` backend attempt is a payment attempt, not a probe: if the provider gates pass, it fills the
+form and clicks PAY. Use it only with explicit authorization to incur the parking charge. The `generic_agent`
+dry-run is the backend-side no-payment validation path.
+
+A visible entry-page provider check is recorded as `action_required` / `PROVIDER_VERIFICATION_REQUIRED`, and a
+visible checkout challenge before PAY is recorded as `action_required` / `CAPTCHA_CHALLENGED`; neither path has
+purchased anything. After PAY the result is genuinely ambiguous, so a challenge remains `unknown` and PAY must
+not be retried. Use `remote_emulator.sh` for manual intervention in the persistent profile.
 
 ## The generic parking agent
 
@@ -172,8 +174,10 @@ observes each screen, lets a multimodal model choose one bounded UI action at a 
 provider's checkout. There it stops. The comma shows the driver the merchant, the location, the vehicle, the
 duration and the total, and nothing is paid until they slide to confirm.
 
-The model chooses which element to act on next. It does not hold the card, the profile, the spend cap or the
-payment decision. In particular:
+The model chooses which element to act on next on an otherwise unknown provider. It does not hold the card,
+the profile, the spend cap or the payment decision. The known `go.lazparking.com` guest checkout is hybrid:
+the model handles its variable entry and rate screens, while exact stable field ids drive deterministic,
+state-first profile filling at checkout. In particular:
 
 - The total shown, hashed and charged is parsed off the page. Whatever figure the model reports is discarded,
   and the page is re-read for exact equality immediately before the pay click; any change aborts the purchase.
@@ -193,6 +197,7 @@ Enable it with `PARKING_AGENT_ENABLED=1`. Settings, all optional except the card
 PARKING_AGENT_ENABLED=1
 PARKING_AGENT_MAX_TOTAL_MINOR=3000     # hard ceiling in minor units
 PARKING_AGENT_DRY_RUN=0                # 1 reaches the checkout and stops before paying
+PARKING_AGENT_MANUAL_VERIFICATION_WAIT_S=0  # dry-run-only pause for a person; 0 disables it
 PARKING_AGENT_MODEL=gemini-2.5-flash
 PARKING_AGENT_LOCATION=us-west1
 PARKING_AGENT_DIAG_DIR=/var/lib/parking-demo/agent-diag
@@ -224,8 +229,20 @@ and recognizable Stripe, CardConnect, Adyen, Braintree, Square, or PayPal-style 
 Mandatory accounts, OTP/MFA, CAPTCHA, app-only checkout, inaccessible canvas/shadow widgets, or an unusual
 tokenizer end as a safe `action_required`/failure instead of being bypassed or guessed through.
 
+The supervised LAZ dry run documented in `docs/parking_agent_session.md` proves one three-hour location on the
+common `clip.lazparking.com -> go.lazparking.com` guest flow through quote and automatic cancellation. Treat
+other LAZ configurations as compatible candidates, not as proven support, until representative locations have
+also reached their quote boundary without payment.
+
 Run it with `PARKING_AGENT_DRY_RUN=1` against a real provider first. That exercises the whole path, including
 the confirmation prompt on the comma, and stops before spending anything.
+
+For a supervised diagnostic only, set `PARKING_AGENT_MANUAL_VERIFICATION_WAIT_S` to a short positive interval
+and raise `PARKING_AGENT_PREPARE_TIMEOUT_S` enough to contain it. While the agent is still navigating, an entry
+verification or CAPTCHA then pauses the same attached browser session so a person can complete it through
+`remote_emulator.sh --live`. The agent merely polls for the prompt to disappear; it does not click, solve, or
+send the challenge to another service. This option is ignored outside dry-run navigation, and expiry retains
+the normal `action_required` result.
 
 Each run writes bounded mode-0600 JSON metadata to `PARKING_AGENT_DIAG_DIR`: action names, phase, latency,
 screenshot usage, and Vertex token counts when the API reports them. Diagnostics retain at most 50 files and
