@@ -40,6 +40,13 @@ class Settings:
   agent_keepalive_s: int = 20
   agent_max_total_minor: int = 3000
   agent_dry_run: bool = False
+  agent_model: str = "gemini-2.5-flash"
+  agent_location: str = "us-west1"
+  agent_card_number: str = ""
+  agent_card_cvv: str = ""
+  agent_card_expiry_month: str = ""
+  agent_card_expiry_year: str = ""
+  agent_card_zip: str = ""
 
   @classmethod
   def from_environment(cls) -> Settings:
@@ -71,5 +78,13 @@ class Settings:
       agent_max_total_minor=int(os.getenv("PARKING_AGENT_MAX_TOTAL_MINOR", "3000")),
       # Stops before the pay click; how a real merchant is exercised without buying anything.
       agent_dry_run=os.getenv("PARKING_AGENT_DRY_RUN", "0") == "1",
+      agent_model=os.getenv("PARKING_AGENT_MODEL", "gemini-2.5-flash"),
+      agent_location=os.getenv("PARKING_AGENT_LOCATION", "us-west1"),
+      # The agent's own card, kept separate from the LAZ one so enabling it is a deliberate act.
+      agent_card_number=os.getenv("PARKING_AGENT_CARD_NUMBER", ""),
+      agent_card_cvv=os.getenv("PARKING_AGENT_CARD_CVV", ""),
+      agent_card_expiry_month=os.getenv("PARKING_AGENT_CARD_EXPIRY_MONTH", ""),
+      agent_card_expiry_year=os.getenv("PARKING_AGENT_CARD_EXPIRY_YEAR", ""),
+      agent_card_zip=os.getenv("PARKING_AGENT_CARD_ZIP", ""),
     )
 

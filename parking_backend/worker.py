@@ -245,6 +245,23 @@ def main() -> None:
       profile=LazProfile.from_environment(),
       flaresolverr_url=settings.flaresolverr_url,
     )
+  if settings.agent_enabled:
+    from parking_backend.agent.adapter import GENERIC_PROVIDER_ID, GenericAgentAdapter
+    from parking_backend.agent.driver import DriverSession
+    from parking_backend.agent.llm import VertexGeminiClient
+    from parking_backend.agent.secrets import SecretVault
+
+    vault = SecretVault(card_number=settings.agent_card_number, card_cvv=settings.agent_card_cvv,
+                        card_expiry_month=settings.agent_card_expiry_month,
+                        card_expiry_year=settings.agent_card_expiry_year,
+                        card_zip=settings.agent_card_zip)
+    adapters[GENERIC_PROVIDER_ID] = GenericAgentAdapter(
+      llm=VertexGeminiClient(location=settings.agent_location, model=settings.agent_model),
+      vault=vault,
+      browser_factory=lambda: DriverSession(settings.appium_url, vault=vault),
+      max_total_minor=settings.agent_max_total_minor,
+      dry_run=settings.agent_dry_run,
+    )
   worker = Worker(
     settings,
     store,
