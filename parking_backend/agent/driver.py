@@ -19,6 +19,7 @@ from parking_backend.appium_adapter import CHROMEDRIVER_PATH, FormChanged
 NEW_COMMAND_TIMEOUT_S = 600
 PAGE_LOAD_TIMEOUT_S = 30
 DEFAULT_WARMUP_URLS = ("https://www.google.com/", "https://en.wikipedia.org/")
+SECURITY_VERIFICATION_ATTEMPTS = 12
 
 
 def _set_value_js() -> str:
@@ -128,6 +129,7 @@ class DriverSession:
   def open_url(self, url: str) -> None:
     self._warm_up()
     self.driver.get(url)
+    _wait_for_security_verification(self.driver)
 
   def tap(self, nid: str) -> None:
     element = resolve(self.driver, nid)
@@ -175,3 +177,20 @@ class DriverSession:
 
   def screenshot(self) -> bytes | None:
     return capture(self.driver)
+
+
+def _wait_for_security_verification(driver) -> None:
+  """Let a provider's own transient bot check finish; never click or attempt to solve a challenge."""
+  for reload_left in (1, 0):
+    for _ in range(SECURITY_VERIFICATION_ATTEMPTS):
+      try:
+        if "just a moment" not in str(driver.title).lower():
+          return
+      except Exception:
+        return  # the agent will observe and classify whatever page is actually available
+      time.sleep(1)
+    if reload_left:
+      try:
+        driver.refresh()
+      except Exception:
+        return
