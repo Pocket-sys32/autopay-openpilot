@@ -7,11 +7,12 @@ setter below is what makes React-style fields actually accept input.
 from __future__ import annotations
 
 import os
+import re
 import time
 
 from parking_backend.agent.dom import capture, harvest, resolve
 from parking_backend.agent.secrets import SecretVault
-from parking_backend.agent.types import Observation
+from parking_backend.agent.types import Observation, StaleNode
 from parking_backend.appium_adapter import CHROMEDRIVER_PATH, FormChanged
 
 
@@ -20,6 +21,12 @@ NEW_COMMAND_TIMEOUT_S = 600
 PAGE_LOAD_TIMEOUT_S = 30
 DEFAULT_WARMUP_URLS = ("https://www.google.com/", "https://en.wikipedia.org/")
 SECURITY_VERIFICATION_ATTEMPTS = 12
+BY_CSS_SELECTOR = "css selector"
+BY_TAG_NAME = "tag name"
+_AUTOCOMPLETE_SLOTS = {
+  "cc-number": "card_number", "cc-csc": "card_cvv", "cc-exp": "card_expiry",
+  "cc-exp-month": "card_expiry_month", "cc-exp-year": "card_expiry_year", "postal-code": "card_zip",
+}
 
 
 def _set_value_js() -> str:
@@ -142,6 +149,28 @@ class DriverSession:
     if written != text:
       raise FormChanged(f"the field behind {nid} did not accept the value")
 
+  def fill_secret(self, slot: str, value: str) -> None:
+    """Resolve a payment field structurally, including cross-origin tokenizer frames.
+
+    The model supplies only the slot name. It never receives or addresses the underlying element."""
+    driver = self.driver
+    try:
+      location = _find_secret_field(driver, slot)
+      if location is None:
+        raise FormChanged(f"exactly one visible {slot} field was not found")
+      frame_index, element_index = location
+      _enter_frame(driver, frame_index)
+      elements = [element for element in driver.find_elements(BY_CSS_SELECTOR, "input") if element.is_displayed()]
+      if element_index >= len(elements) or classify_card_field(_field_attributes(elements[element_index])) != slot:
+        raise StaleNode(f"the {slot} field changed before it could be filled")
+      element = elements[element_index]
+      element.click()
+      element.send_keys(value)
+      if not _secret_was_accepted(slot, value, str(element.get_attribute("value") or "")):
+        raise FormChanged(f"the {slot} field did not accept its configured value")
+    finally:
+      driver.switch_to.default_content()
+
   def select(self, nid: str, option_text: str) -> None:
     from selenium.webdriver.support.ui import Select
     element = resolve(self.driver, nid)
@@ -194,3 +223,69 @@ def _wait_for_security_verification(driver) -> None:
         driver.refresh()
       except Exception:
         return
+
+
+def classify_card_field(attributes: dict[str, str]) -> str | None:
+  """Classify one input from metadata only; values are never inspected or logged."""
+  autocomplete = attributes.get("autocomplete", "").strip().lower()
+  if autocomplete in _AUTOCOMPLETE_SLOTS:
+    return _AUTOCOMPLETE_SLOTS[autocomplete]
+  text = " ".join(attributes.get(key, "") for key in ("name", "id", "placeholder", "aria-label")).lower()
+  compact = re.sub(r"[^a-z0-9]", "", text)
+  if any(token in compact for token in ("cardholder", "nameoncard", "cardname")):
+    return None
+  if any(token in compact for token in ("securitycode", "cardverification", "cvv", "cvc", "cvn", "csc")):
+    return "card_cvv"
+  if any(token in compact for token in ("expirymonth", "expirationmonth", "expiryfieldmonth", "expmonth", "ccmonth")):
+    return "card_expiry_month"
+  if any(token in compact for token in ("expiryyear", "expirationyear", "expiryfieldyear", "expyear", "ccyear")):
+    return "card_expiry_year"
+  if any(token in compact for token in ("expirydate", "expirationdate", "cardexpiry", "cardexpiration", "ccexp")):
+    return "card_expiry"
+  if any(token in compact for token in ("billingzip", "billingpostal", "cardzip", "cardpostal")):
+    return "card_zip"
+  if any(token in compact for token in ("cardnumber", "ccnumber", "ccnum", "panfield", "accountnumber")):
+    return "card_number"
+  return None
+
+
+def _field_attributes(element) -> dict[str, str]:
+  return {key: str(element.get_attribute(key) or "")
+          for key in ("autocomplete", "name", "id", "placeholder", "aria-label")}
+
+
+def _enter_frame(driver, frame_index: int | None) -> None:
+  driver.switch_to.default_content()
+  if frame_index is not None:
+    frames = driver.find_elements(BY_TAG_NAME, "iframe")
+    if frame_index >= len(frames):
+      raise StaleNode("the payment frame changed before it could be filled")
+    driver.switch_to.frame(frames[frame_index])
+
+
+def _find_secret_field(driver, slot: str) -> tuple[int | None, int] | None:
+  driver.switch_to.default_content()
+  frames = driver.find_elements(BY_TAG_NAME, "iframe")
+  matches: list[tuple[int | None, int]] = []
+  for frame_index in (None, *range(len(frames))):
+    try:
+      _enter_frame(driver, frame_index)
+      visible = [element for element in driver.find_elements(BY_CSS_SELECTOR, "input") if element.is_displayed()]
+      matches.extend((frame_index, index) for index, element in enumerate(visible)
+                     if classify_card_field(_field_attributes(element)) == slot)
+    except Exception:
+      continue  # an unrelated cross-origin frame may not expose a document through WebDriver
+  driver.switch_to.default_content()
+  return matches[0] if len(matches) == 1 else None
+
+
+def _secret_was_accepted(slot: str, expected: str, actual: str) -> bool:
+  expected_digits = re.sub(r"\D", "", expected)
+  actual_digits = re.sub(r"\D", "", actual)
+  if slot == "card_number":
+    return len(actual_digits) == len(expected_digits) or actual_digits[-4:] == expected_digits[-4:]
+  if slot == "card_cvv":
+    return len(actual_digits) == len(expected_digits)
+  if slot in ("card_expiry", "card_expiry_month", "card_expiry_year"):
+    return actual_digits.endswith(expected_digits[-len(actual_digits):]) and bool(actual_digits)
+  return actual.strip().replace(" ", "").upper() == expected.strip().replace(" ", "").upper()

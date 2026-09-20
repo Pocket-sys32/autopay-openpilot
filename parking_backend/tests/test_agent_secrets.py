@@ -14,6 +14,7 @@ class TestSecrets(unittest.TestCase):
       SecretVault().get("card_number")
     with self.assertRaises(KeyError):
       VAULT.get("card_pin")
+    self.assertEqual(VAULT.get("card_expiry"), "12/30")
 
   def test_a_card_number_is_scrubbed_wherever_it_appears(self):
     self.assertNotIn("4242424242424242", redact("card 4242424242424242 saved", VAULT))

@@ -33,6 +33,10 @@ class SecretVault:
   card_zip: str = ""
 
   def get(self, slot: str) -> str:
+    if slot == "card_expiry":
+      if not self.card_expiry_month or not self.card_expiry_year:
+        raise KeyError("no value configured for card_expiry")
+      return f"{self.card_expiry_month}/{self.card_expiry_year[-2:]}"
     value = getattr(self, slot, "")
     if not value:
       raise KeyError(f"no value configured for {slot}")
@@ -40,8 +44,10 @@ class SecretVault:
 
   def literals(self) -> tuple[str, ...]:
     """Every secret string, longest first, so redaction cannot leave a fragment behind."""
+    combined_expiry = (f"{self.card_expiry_month}/{self.card_expiry_year[-2:]}"
+                       if self.card_expiry_month and self.card_expiry_year else "")
     values = [v for v in (self.card_number, self.card_cvv, self.card_expiry_month, self.card_expiry_year,
-                          self.card_zip) if v]
+                          combined_expiry, self.card_zip) if v]
     return tuple(sorted(set(values), key=len, reverse=True))
 
 

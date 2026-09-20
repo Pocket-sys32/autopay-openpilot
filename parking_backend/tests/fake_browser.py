@@ -21,6 +21,7 @@ class FakeBrowser:
     self.pages = pages
     self.current = start
     self.typed: list[tuple[str, str]] = []
+    self.secrets: list[tuple[str, str]] = []
     self.tapped: list[str] = []
     self.selected: list[tuple[str, str]] = []
     self.scrolled: list[tuple[str, str]] = []
@@ -50,6 +51,9 @@ class FakeBrowser:
 
   def type_text(self, nid: str, text: str) -> None:
     self.typed.append((nid, text))
+
+  def fill_secret(self, slot: str, value: str) -> None:
+    self.secrets.append((slot, value))
 
   def select(self, nid: str, option_text: str) -> None:
     self.selected.append((nid, option_text))

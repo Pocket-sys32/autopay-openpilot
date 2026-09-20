@@ -66,6 +66,19 @@ class TestDomain(unittest.TestCase):
     self.assertEqual(registrable("checkout.parking.example.com"), "example.com")
     self.assertEqual(registrable("EXAMPLE.COM"), "example.com")
 
+  def test_country_code_public_suffix_is_not_treated_as_a_shared_site(self):
+    self.assertEqual(registrable("checkout.parking.co.uk"), "parking.co.uk")
+    check = ActionValidator(AgentPolicy(allowed_hosts=frozenset({"checkout.parking.co.uk"})), VAULT)
+    self.assertTrue(check.host_allowed("pay.parking.co.uk"))
+    self.assertFalse(check.host_allowed("attacker.co.uk"))
+
+  def test_payment_hosts_are_narrowly_admitted(self):
+    check = validator()
+    self.assertTrue(check.host_allowed("js.stripe.com"))
+    self.assertTrue(check.host_allowed("checkout.stripe.com"))
+    self.assertTrue(check.host_allowed("pay.google.com"))
+    self.assertFalse(check.host_allowed("accounts.google.com"))
+
   def test_opening_an_unrelated_host_is_refused(self):
     for url in ("https://attacker.example/pay", "http://parking.example.com/x", "https://evil.test/x"):
       with self.subTest(url=url), self.assertRaises(OffDomain):

@@ -16,7 +16,8 @@ PROFILE_FIELDS = frozenset({
   "plate", "plate_state", "first_name", "last_name", "email", "phone", "zip", "street", "name_on_card",
   "duration",
 })
-SECRET_SLOTS = frozenset({"card_number", "card_cvv", "card_expiry_month", "card_expiry_year", "card_zip"})
+SECRET_SLOTS = frozenset({"card_number", "card_cvv", "card_expiry", "card_expiry_month", "card_expiry_year",
+                          "card_zip"})
 INTERVENTION_CODES = frozenset({"APP_REQUIRED", "CAPTCHA", "ACCOUNT_REQUIRED", "OTP_REQUIRED", "AMBIGUOUS"})
 SCROLL_DIRECTIONS = frozenset({"up", "down"})
 MAX_WAIT_SECONDS = 5

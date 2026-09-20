@@ -162,8 +162,8 @@ payment decision. In particular:
 - The model addresses elements only by ids the current screen handed out. Card fields are never given one, so
   the only way a card value reaches a page is `FILL_SECRET`, which names a slot and is refused until the
   driver has confirmed.
-- Navigation is confined to the scanned URL's registrable domain, hosts reached by redirect from it, and
-  known payment hosts.
+- Navigation is confined to the scanned URL's site and narrowly listed payment hosts. Common country-code
+  suffixes such as `co.uk` are kept separate rather than treated as one shared site.
 - A captcha, an account, a one-time code or an app-only flow ends the attempt as `action_required`. The agent
   never attempts to work around a security check.
 - Both spend caps bind: the driver's `ParkingMaxTotalMinor` and the VM's `PARKING_AGENT_MAX_TOTAL_MINOR`.
@@ -183,6 +183,9 @@ PARKING_AGENT_CARD_CVV=...
 PARKING_AGENT_CARD_EXPIRY_MONTH=...
 PARKING_AGENT_CARD_EXPIRY_YEAR=...
 PARKING_AGENT_CARD_ZIP=...
+PARKING_AGENT_FIRST_NAME=...           # request values take precedence when the device supplies them
+PARKING_AGENT_LAST_NAME=...
+PARKING_AGENT_NAME_ON_CARD=...
 PARKING_AGENT_EMAIL=...                # falls back to the PARKING_LAZ_* equivalents
 PARKING_AGENT_MOBILE=...
 PARKING_AGENT_ZIP=...
@@ -190,6 +193,18 @@ PARKING_AGENT_STREET=...
 PARKING_AGENT_ATTACH_CHROME=1          # see the attach-mode note above
 PARKING_AGENT_WARMUP_URLS=             # empty string turns warming off
 ```
+
+The request always supplies the normalized HTTPS QR URL, plate, requested duration, and device spend cap.
+Contact and billing identity are provider-dependent: first/last name and name on card can arrive with the
+request, while email, mobile, postal code, and street come from the protected backend environment. A live
+generic payment additionally requires the dedicated card number, CVV, expiry month/year, and billing postal
+code above. The card values remain in the backend vault; Vertex sees only the available profile-field names,
+redacted page text, bounded interactive-node labels, recent action names, and redacted screenshots.
+
+This is portable to ordinary guest web checkouts, not guaranteed for every carrier. Standard HTML controls
+and recognizable Stripe, CardConnect, Adyen, Braintree, Square, or PayPal-style payment frames are supported.
+Mandatory accounts, OTP/MFA, CAPTCHA, app-only checkout, inaccessible canvas/shadow widgets, or an unusual
+tokenizer end as a safe `action_required`/failure instead of being bypassed or guessed through.
 
 Run it with `PARKING_AGENT_DRY_RUN=1` against a real provider first. That exercises the whole path, including
 the confirmation prompt on the comma, and stops before spending anything.

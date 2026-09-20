@@ -117,6 +117,7 @@ class TestHints(unittest.TestCase):
 
   def test_payment_fields_are_reported_as_present(self):
     self.assertIn("payment_fields_present", detect_hints("", (Node("n1", "textbox", "Card number"),)))
+    self.assertIn("payment_fields_present", detect_hints("", (), payment_fields=1))
 
   def test_an_ordinary_page_produces_no_hints(self):
     self.assertEqual(detect_hints("Example Garage\nTotal $14.50", (Node("n1", "button", "Pay"),)), ())

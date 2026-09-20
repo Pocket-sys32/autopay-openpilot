@@ -25,7 +25,7 @@ these shapes (the values are examples, not instructions):
 - {{"action":"SCROLL","direction":"down","nid":"","why":"..."}}
 - {{"action":"WAIT","seconds":3,"for":"page loading","why":"..."}}
 - {{"action":"FILL_PROFILE","nid":"n1","field":"plate","why":"..."}}
-- {{"action":"FILL_SECRET","nid":"n1","slot":"card_number","why":"..."}}
+- {{"action":"FILL_SECRET","slot":"card_number","why":"..."}}
 - {{"action":"REQUEST_USER","code":"CAPTCHA","message":"challenge shown","why":"..."}}
 - {{"action":"INSTALL_APP","package":"com.example.app","why":"..."}}
 - {{"action":"READY_TO_PURCHASE","merchant":"Example Garage","location_label":"123 Main St",
@@ -61,7 +61,8 @@ When the payment has visibly gone through, return DONE with the evidence you can
 
 
 def build_messages(observation: Observation, phase: AgentPhase, profile: AgentProfile,
-                   vault: SecretVault | None = None, *, goal: str = "") -> tuple[str, str]:
+                   vault: SecretVault | None = None, *, goal: str = "",
+                   recent_actions: tuple[str, ...] = ()) -> tuple[str, str]:
   """Return (system, user). The user half is the observation; the system half never varies within a phase,
   so it stays cacheable."""
   system = SYSTEM_PROMPT if phase is not AgentPhase.COMMITTING else f"{SYSTEM_PROMPT}\n\n{COMMIT_PROMPT}"
@@ -69,6 +70,7 @@ def build_messages(observation: Observation, phase: AgentPhase, profile: AgentPr
     "goal": goal or "Park this vehicle for the requested duration.",
     "phase": phase.value,
     "profile_fields_available": list(profile.available()),
+    "recent_actions": list(recent_actions[-8:]),
     "observation": observation.describe(),
   }
   user = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)

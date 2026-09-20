@@ -229,5 +229,23 @@ larger adversarial prompt-injection corpus after the first dry-run DOMs are avai
 
 ## Current continuation point
 
-Commit and push the completed M7 hardening before touching the VM. M6 requires real infrastructure and an
-explicitly controlled dry run; payment must remain disabled until dry-run evidence has been reviewed.
+M7 was committed and pushed as `f1ee37374`. Subsequent live-validation fixes were also committed and pushed:
+
+- `5e34178b0` — isolate live agent card credentials; dry-run may reuse the LAZ card only
+- `441295055` — send payer identity to the generic agent
+- `f83f595db` — wait deterministically for a transient Cloudflare security page
+- `8b1a2b2b6` — give Gemini the exact flat action schema
+- `1f8b1e3a6` — re-observe after a provider rerenders a node
+
+The VM service account has Vertex access and a real Vertex request succeeded. The backend is deployed in
+enabled dry-run/attach mode, Chrome is signed in, and `myaccount.google.com` opens in that persistent profile.
+Live checkout attempts reached provider security checks but never reached confirmation or payment. At the
+user's request, further dry runs and provider probes are paused to avoid consuming CAPTCHA/trust reputation;
+do not clear, relaunch, or probe the Chrome profile without renewed authorization.
+
+Offline development resumed at the generic payment boundary. The next change makes `FILL_SECRET` locate a
+card field deterministically by slot, including provider-hosted iframes, instead of requiring a model-visible
+node id. It also adds combined-expiry support, recent action context, iframe payment hints, and a safer domain
+boundary for common country-code suffixes. After this is committed and pushed, the next useful offline work is
+captured synthetic provider fixtures and adversarial prompt-injection coverage. M6 live checkout validation
+and any paid session remain intentionally paused.

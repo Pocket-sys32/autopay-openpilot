@@ -30,6 +30,7 @@ class Browser:
   def open_url(self, url: str) -> None: ...
   def tap(self, nid: str) -> None: ...
   def type_text(self, nid: str, text: str) -> None: ...
+  def fill_secret(self, slot: str, value: str) -> None: ...
   def select(self, nid: str, option_text: str) -> None: ...
   def scroll(self, direction: str, nid: str = "") -> None: ...
   def back(self) -> None: ...
@@ -113,7 +114,8 @@ class AgentLoop:
     return observation
 
   def _decide(self, observation: Observation, phase: AgentPhase) -> Action:
-    system, user = build_messages(observation, phase, self.profile, self.vault)
+    history = tuple(step.action for step in self.policy.transcript)
+    system, user = build_messages(observation, phase, self.profile, self.vault, recent_actions=history)
     send_screenshot = phase is AgentPhase.COMMITTING or observation.screen_hash != self._last_screenshot_hash
     screenshot = observation.screenshot_jpeg if send_screenshot else None
     if send_screenshot:
@@ -169,7 +171,7 @@ class AgentLoop:
     elif action.kind == "FILL_SECRET":
       if self.vault is None:
         raise InvariantDrift("no payment details are configured on this backend")
-      self.browser.type_text(action.nid, self.vault.get(action.slot))
+      self.browser.fill_secret(action.slot, self.vault.get(action.slot))
     else:
       raise AgentStuck(f"no handler for {action.kind}")
     self._log(phase, action, "", elapsed_ms=(time.time_ns() - started) // 1_000_000)

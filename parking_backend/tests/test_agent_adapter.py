@@ -84,7 +84,7 @@ class TestAgentThroughWorker(unittest.TestCase):
     row = self.row()
     self.assertEqual((row["state"], row["reason_code"]), ("succeeded", "AGENT_PAID"))
     self.assertFalse(row["demo"])  # real money must never be reported as a demo
-    self.assertIn(("n1", "4242424242424242"), self.browser.typed)
+    self.assertIn(("card_number", "4242424242424242"), self.browser.secrets)
     self.assertIsNone(worker.held)
 
   def test_cancelling_leaves_the_checkout_unpaid(self):
@@ -96,7 +96,7 @@ class TestAgentThroughWorker(unittest.TestCase):
     worker.process_once()
     self.assertEqual(self.row()["reason_code"], "USER_DECLINED")
     self.assertNotIn("n3", self.browser.tapped)
-    self.assertFalse(any(value == "4242424242424242" for _nid, value in self.browser.typed))
+    self.assertFalse(any(value == "4242424242424242" for _slot, value in self.browser.secrets))
 
   def test_the_device_cap_binds_the_backend(self):
     # The driver set a lower ceiling than the VM's; the lower one has to win.

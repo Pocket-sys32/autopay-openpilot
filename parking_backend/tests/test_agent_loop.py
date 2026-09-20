@@ -112,6 +112,13 @@ class TestNavigation(unittest.TestCase):
     for value in ("DEMO123", "Ada", "Lovelace", "a@example.com", "5550100"):
       self.assertNotIn(value, first_prompt)
 
+  def test_recent_actions_are_returned_without_profile_or_secret_values(self):
+    agent, _ = loop(TO_CHECKOUT)
+    agent.navigate(START)
+    _system, last_prompt = agent.llm.prompts[-1]
+    self.assertIn('"recent_actions":["TAP(n1)","FILL_PROFILE(n1)","SELECT(n2)"]', last_prompt)
+    self.assertNotIn("4242424242424242", last_prompt)
+
   def test_the_model_is_given_the_exact_flat_action_shape(self):
     agent, _ = loop(TO_CHECKOUT)
     agent.navigate(START)
@@ -209,7 +216,7 @@ class TestCommit(unittest.TestCase):
     ])
     self.assertEqual(result["total_minor"], 1450)
     self.assertEqual(marks, [True])
-    self.assertIn(("n1", "4242424242424242"), browser.typed)
+    self.assertIn(("card_number", "4242424242424242"), browser.secrets)
     self.assertEqual(browser.tapped, ["n1", "n3"])
 
   def test_submitting_is_committed_immediately_before_the_click(self):

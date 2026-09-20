@@ -24,15 +24,27 @@ ALLOWED_BY_PHASE = {
                                     "REQUEST_USER", "ERROR"}),
 }
 NODE_ACTIONS = frozenset({"TAP", "TYPE", "SELECT", "FILL_PROFILE"})
-# Tokenizers live on their own hosts, so navigation must be allowed to land there.
-PAYMENT_HOSTS = frozenset({"cardconnect.com", "js.stripe.com", "checkout.stripe.com", "pay.google.com"})
+# Tokenizers sometimes complete on their own hosts, so a submitted checkout may land there. Keep exact
+# hosts exact (notably Google) while allowing the dedicated payment-provider domains to use subdomains.
+PAYMENT_EXACT_HOSTS = frozenset({"checkout.stripe.com", "pay.google.com"})
+PAYMENT_DOMAIN_HOSTS = frozenset({
+  "adyen.com", "braintreegateway.com", "cardconnect.com", "paypal.com", "squareup.com", "stripe.com",
+})
+
+# Common structured second-level labels below country-code TLDs. Treating `co.uk` as a registrable domain
+# would allow every unrelated co.uk site. This conservative rule may keep two related hosts separate on an
+# unusual registry; it must never collapse unrelated sites onto a public suffix.
+COUNTRY_SECOND_LEVELS = frozenset({"ac", "co", "com", "edu", "gov", "mil", "net", "org"})
 
 
 def registrable(host: str) -> str:
-  """A deliberately conservative last-two-labels rule. It can be too strict on a multi-part TLD, which
-  costs a retry; being too loose would widen the allowlist, which costs money."""
-  labels = (host or "").lower().strip(".").split(".")
-  return ".".join(labels[-2:]) if len(labels) >= 2 else (host or "").lower()
+  """Return a conservative site boundary without broadening common country-code public suffixes."""
+  normalized = (host or "").lower().strip(".")
+  labels = normalized.split(".")
+  if len(labels) < 2:
+    return normalized
+  width = 3 if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in COUNTRY_SECOND_LEVELS else 2
+  return ".".join(labels[-width:])
 
 
 class ActionValidator:
@@ -50,8 +62,10 @@ class ActionValidator:
       self._hosts.add(registrable(host))
 
   def host_allowed(self, host: str) -> bool:
-    base = registrable(host)
-    return bool(base) and (base in self._hosts or base in PAYMENT_HOSTS)
+    normalized = (host or "").lower().strip(".")
+    base = registrable(normalized)
+    return bool(base) and (base in self._hosts or normalized in PAYMENT_EXACT_HOSTS or
+                           base in PAYMENT_DOMAIN_HOSTS)
 
   def enter(self, phase: AgentPhase) -> None:
     """Start a phase with its own budgets."""

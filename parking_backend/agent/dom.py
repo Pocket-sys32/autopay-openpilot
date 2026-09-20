@@ -31,6 +31,8 @@ HARVEST_JS = """
 const MAX = arguments[0], CARD = arguments[1], INTERACTIVE = arguments[2];
 document.querySelectorAll('[data-pa-nid]').forEach(e => e.removeAttribute('data-pa-nid'));
 const cards = new Set(Array.from(document.querySelectorAll(CARD)));
+const paymentFrames = Array.from(document.querySelectorAll('iframe')).filter(f =>
+  /(stripe|cardconnect|adyen|braintree|square|paypal)/i.test(f.src || '')).length;
 const visible = (e) => {
   if (!e.getClientRects().length) return false;
   const s = window.getComputedStyle(e);
@@ -66,7 +68,8 @@ for (const e of document.querySelectorAll(INTERACTIVE)) {
   out.push(node);
 }
 const body = document.body ? (document.body.innerText || '') : '';
-return {nodes: out, text: body.slice(0, arguments[4]), title: document.title || '', url: location.href};
+return {nodes: out, text: body.slice(0, arguments[4]), title: document.title || '', url: location.href,
+        payment_fields: cards.size + paymentFrames};
 """
 
 # Hide payment fields and every iframe before a screenshot, then put them back.
@@ -100,7 +103,7 @@ def harvest(driver, step: int, *, vault: SecretVault | None = None,
     step=step, url=url, host=urlsplit(url).hostname or "", title=str(raw.get("title") or ""),
     nodes=nodes, text_digest=redact(str(raw.get("text") or ""), vault),
     screenshot_jpeg=capture(driver) if screenshot else None,
-    hints=detect_hints(str(raw.get("text") or ""), nodes),
+    hints=detect_hints(str(raw.get("text") or ""), nodes, payment_fields=int(raw.get("payment_fields") or 0)),
   )
 
 
@@ -132,7 +135,7 @@ def capture(driver) -> bytes | None:
       pass
 
 
-def detect_hints(text: str, nodes: tuple[Node, ...]) -> tuple[str, ...]:
+def detect_hints(text: str, nodes: tuple[Node, ...], *, payment_fields: int = 0) -> tuple[str, ...]:
   """Deterministic notes about the screen, so the model is not the only thing that can spot a blocker."""
   lowered = text.lower()
   hints = []
@@ -146,7 +149,7 @@ def detect_hints(text: str, nodes: tuple[Node, ...]) -> tuple[str, ...]:
     hints.append("otp_prompt")
   if any(word in lowered for word in ("accept cookies", "cookie preferences", "we use cookies")):
     hints.append("cookie_banner")
-  if any("card" in node.name.lower() or node.input_type == "password" for node in nodes):
+  if payment_fields or any("card" in node.name.lower() or node.input_type == "password" for node in nodes):
     hints.append("payment_fields_present")
   return tuple(hints)
 
