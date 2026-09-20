@@ -16,8 +16,13 @@ TERMINAL_STATES = frozenset({"succeeded", "failed", "expired", "action_required"
 VALID_TRANSITIONS = {
   "accepted": frozenset({"preparing", "expired", "failed"}),
   "preparing": frozenset({"submitting", "failed", "action_required", "expired"}),
-  "submitting": frozenset({"succeeded", "unknown"}),
+  # "failed" from submitting is only used for a card decline the provider confirmed.
+  "submitting": frozenset({"succeeded", "unknown", "failed"}),
 }
+LAZ_PROVIDER_ID = "laz_ttp"
+LAZ_LOCATION_ID = "143245"
+LAZ_DURATION_SECONDS = 10800
+LAZ_PAYER_FIELDS = ("payer_first_name", "payer_last_name", "name_on_card")
 
 
 class AttemptConflict(RuntimeError):
@@ -42,11 +47,19 @@ def validate_attempt(payload: dict[str, object], *, now_ms: int) -> dict[str, ob
     "qr_payload_sha256", "plate", "plate_country", "plate_region", "duration_seconds",
     "evidence_age_ms", "dispatch_deadline_unix_ms",
   }
-  if set(payload) != required:
+  is_laz = payload.get("provider_id") == LAZ_PROVIDER_ID
+  if set(payload) != (required | set(LAZ_PAYER_FIELDS) if is_laz else required):
     raise InvalidAttempt("attempt fields do not match schema version 1")
   if payload["schema_version"] != 1 or payload["environment"] != "demo":
     raise InvalidAttempt("unsupported schema or environment")
-  if payload["provider_id"] != "demo_google_form" or payload["form_id"] != FORM_ID:
+  if is_laz:
+    if payload["form_id"] != LAZ_LOCATION_ID:
+      raise InvalidAttempt("unsupported LAZ location")
+    for field in LAZ_PAYER_FIELDS:
+      value = payload[field]
+      if not isinstance(value, str) or not 1 <= len(value) <= 40 or not all(c.isascii() and (c.isalpha() or c in " -'") for c in value):
+        raise InvalidAttempt(f"invalid {field}")
+  elif payload["provider_id"] != "demo_google_form" or payload["form_id"] != FORM_ID:
     raise InvalidAttempt("unsupported provider or form")
   for field in ("attempt_id", "episode_id"):
     value = payload[field]
@@ -58,7 +71,7 @@ def validate_attempt(payload: dict[str, object], *, now_ms: int) -> dict[str, ob
   plate = payload["plate"]
   if not isinstance(plate, str) or not plate.isascii() or not plate.isalnum() or not 1 <= len(plate) <= 12:
     raise InvalidAttempt("invalid plate")
-  if payload["duration_seconds"] not in ALLOWED_DURATIONS:
+  if payload["duration_seconds"] != LAZ_DURATION_SECONDS if is_laz else payload["duration_seconds"] not in ALLOWED_DURATIONS:
     raise InvalidAttempt("unsupported duration")
   evidence_age = payload["evidence_age_ms"]
   if isinstance(evidence_age, bool) or not isinstance(evidence_age, int) or not 0 <= evidence_age <= 1_000:
@@ -311,7 +324,7 @@ class ParkingStore:
     return {
       "schema_version": 1,
       "environment": "demo",
-      "demo": True,
+      "demo": payload.get("provider_id") != LAZ_PROVIDER_ID,
       "attempt_id": row["attempt_id"],
       "episode_id": row["episode_id"],
       "state": row["state"],

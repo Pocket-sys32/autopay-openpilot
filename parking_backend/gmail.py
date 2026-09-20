@@ -43,18 +43,20 @@ class GmailSender:
     duration_value = request["duration_seconds"]
     if not isinstance(duration_value, int) or isinstance(duration_value, bool):
       raise ValueError("stored duration is invalid")
-    masked_plate = "*" * max(0, len(str(request["plate"])) - 2) + str(request["plate"])[-2:]
+    is_laz = request.get("provider_id") == "laz_ttp"
+    plate = str(request["plate"]) if is_laz else "*" * max(0, len(str(request["plate"])) - 2) + str(request["plate"])[-2:]
     message = EmailMessage()
     message["To"] = self.recipient
     message["From"] = self.sender
-    message["Subject"] = f"Parking demo: {attempt['state']}"
+    message["Subject"] = f"Parking: {attempt['state']}" if is_laz else f"Parking demo: {attempt['state']}"
     message.set_content("\n".join([
-      "Comma parking demo result",
+      "Comma parking result" if is_laz else "Comma parking demo result",
       "",
-      "This was a controlled demo. No parking was purchased.",
+      "LAZ Parking, location CA1231 (3959 Harney St, San Diego). Real payment attempt." if is_laz
+      else "This was a controlled demo. No parking was purchased.",
       f"Outcome: {attempt['state']}",
       f"Reason: {attempt['reason_code']}",
-      f"Plate: {masked_plate}",
+      f"Plate: {plate}",
       f"Duration: {duration_value // 3600} hour(s)",
       f"Attempt: {attempt['attempt_id']}",
       "",

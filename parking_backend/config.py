@@ -27,6 +27,11 @@ class Settings:
   test_card_cvv: str
   test_card_expiration: str
   test_zip_code: str
+  laz_enabled: bool
+  laz_card_number: str
+  laz_card_cvv: str
+  laz_card_expiration: str
+  flaresolverr_url: str | None = None
 
   @classmethod
   def from_environment(cls) -> Settings:
@@ -44,5 +49,11 @@ class Settings:
       test_card_cvv=os.getenv("PARKING_TEST_CARD_CVV", "123"),
       test_card_expiration=os.getenv("PARKING_TEST_CARD_EXPIRATION", "12/30"),
       test_zip_code=os.getenv("PARKING_TEST_ZIP_CODE", "95616"),
+      # Real payments stay off unless the VM operator opts in explicitly.
+      laz_enabled=os.getenv("PARKING_LAZ_ENABLED", "0") == "1",
+      laz_card_number=os.getenv("PARKING_LAZ_CARD_NUMBER", ""),
+      laz_card_cvv=os.getenv("PARKING_LAZ_CARD_CVV", ""),
+      laz_card_expiration=os.getenv("PARKING_LAZ_CARD_EXPIRATION", ""),
+      flaresolverr_url=os.getenv("FLARESOLVERR_URL"),
     )
 

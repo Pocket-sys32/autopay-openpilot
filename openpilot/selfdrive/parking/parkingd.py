@@ -19,7 +19,8 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import Ratekeeper
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.parking.backend_client import BackendAttemptResponse, BackendClientError, ParkingBackendClient
-from openpilot.selfdrive.parking.candidate import CandidateRejected, CONTROLLED_FORM_ID, parse_candidate
+from openpilot.selfdrive.parking.candidate import (CandidateRejected, CONTROLLED_FORM_ID, LAZ_DURATION_SECONDS,
+                                                   LAZ_PROVIDER_ID, parse_candidate)
 from openpilot.selfdrive.parking.evidence import IgnitionEdgeTracker, VehicleEvidence
 from openpilot.selfdrive.parking.intent import IntentConfig, IntentProfile, IntentState, evaluate_intent
 from openpilot.selfdrive.parking.journal import ParkingJournal
@@ -262,7 +263,17 @@ class ParkingDaemon:
   def _candidate_valid(self, now_ns: int) -> bool:
     return self.candidate is not None and not self.candidate_ambiguous and 0 <= now_ns - self.candidate.observed_mono_ns <= CANDIDATE_TTL_NS
 
+  def _is_laz(self) -> bool:
+    if self.candidate is not None:
+      return self.candidate.provider_id == LAZ_PROVIDER_ID
+    return self._request is not None and self._request.quote.provider_id == LAZ_PROVIDER_ID
+
+  def _location_id(self) -> str:
+    return self.candidate.location_hint if self._is_laz() and self.candidate is not None else CONTROLLED_FORM_ID
+
   def _duration(self) -> int:
+    if self._is_laz():
+      return LAZ_DURATION_SECONDS  # LAZ's shortest stay at this site
     duration = self.params.get("ParkingDefaultDuration", return_default=True)
     return duration if isinstance(duration, int) and duration in SUPPORTED_DURATIONS else 3600
 
@@ -277,8 +288,9 @@ class ParkingDaemon:
 
   def _make_request(self, plate: str, duration: int, now_ns: int, now_ms: int) -> AttemptRequest:
     assert self.candidate is not None
-    quote = Quote(f"demo-{duration}", self.candidate.provider_id, CONTROLLED_FORM_ID, plate,
-                  BillingMode.FIXED_DURATION, duration, 0, 0, "USD", now_ms + 30_000, now_ms + 30_000, 7200)
+    quote = Quote(f"demo-{duration}", self.candidate.provider_id, self._location_id(), plate,
+                  BillingMode.FIXED_DURATION, duration, 0, 0, "USD", now_ms + 30_000, now_ms + 30_000,
+                  max(7200, duration))
     request = AttemptRequest(self.attempt_id, self.episode_id, quote, 1, now_ms + 30_000, "approve")
     with ParkingJournal(self.journal_path) as journal:
       journal.create_episode(self.episode_id, created_wall_ms=now_ms, created_mono_ns=now_ns)
@@ -288,9 +300,15 @@ class ParkingDaemon:
 
   def _wire_payload(self, request: AttemptRequest, evidence: VehicleEvidence, now_ns: int) -> dict[str, object]:
     assert self.candidate is not None
+    payer: dict[str, object] = {}
+    if request.quote.provider_id == LAZ_PROVIDER_ID:
+      payer = {"payer_first_name": self.params.get("ParkingFirstName") or "",
+               "payer_last_name": self.params.get("ParkingLastName") or "",
+               "name_on_card": self.params.get("ParkingNameOnCard") or ""}
     return {
+      **payer,
       "schema_version": 1, "environment": "demo", "attempt_id": request.attempt_id, "episode_id": request.episode_id,
-      "provider_id": request.quote.provider_id, "form_id": CONTROLLED_FORM_ID,
+      "provider_id": request.quote.provider_id, "form_id": request.quote.location_id,
       "qr_payload_sha256": self.candidate.payload_sha256, "plate": request.quote.plate,
       "plate_country": self.params.get("ParkingPlateCountry") or "", "plate_region": self.params.get("ParkingPlateRegion") or "",
       "duration_seconds": request.quote.duration_seconds,
