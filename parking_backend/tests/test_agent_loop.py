@@ -95,6 +95,14 @@ class TestNavigation(unittest.TestCase):
     for value in ("DEMO123", "Ada", "Lovelace", "a@example.com", "5550100"):
       self.assertNotIn(value, first_prompt)
 
+  def test_the_model_is_given_the_exact_flat_action_shape(self):
+    agent, _ = loop(TO_CHECKOUT)
+    agent.navigate(START)
+    system, _user = agent.llm.prompts[0]
+    self.assertIn('Never use a nested "parameters"', system)
+    self.assertIn('{"action":"WAIT","seconds":3', system)
+    self.assertIn('{"action":"READY_TO_PURCHASE"', system)
+
   def test_the_page_total_wins_over_whatever_the_model_claimed(self):
     lying = TO_CHECKOUT[:-1] + [{**TO_CHECKOUT[-1], "total_minor": 100}]
     agent, _ = loop(lying)

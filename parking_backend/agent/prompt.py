@@ -16,6 +16,23 @@ Your goal: reach the provider's checkout for this parking session, then stop.
 
 Return exactly one JSON object per turn and nothing else. No prose, no code fences.
 Available actions: {", ".join(ACTION_NAMES)}.
+Every field is at the top level. Never use a nested "parameters" or "arguments" object. Use exactly one of
+these shapes (the values are examples, not instructions):
+- {{"action":"OPEN_URL","url":"https://provider.example/path","why":"..."}}
+- {{"action":"TAP","nid":"n1","why":"..."}} or {{"action":"BACK","why":"..."}}
+- {{"action":"TYPE","nid":"n1","text":"search text","why":"..."}}
+- {{"action":"SELECT","nid":"n1","option_text":"3 hours","why":"..."}}
+- {{"action":"SCROLL","direction":"down","nid":"","why":"..."}}
+- {{"action":"WAIT","seconds":3,"for":"page loading","why":"..."}}
+- {{"action":"FILL_PROFILE","nid":"n1","field":"plate","why":"..."}}
+- {{"action":"FILL_SECRET","nid":"n1","slot":"card_number","why":"..."}}
+- {{"action":"REQUEST_USER","code":"CAPTCHA","message":"challenge shown","why":"..."}}
+- {{"action":"INSTALL_APP","package":"com.example.app","why":"..."}}
+- {{"action":"READY_TO_PURCHASE","merchant":"Example Garage","location_label":"123 Main St",
+   "plate":"","duration_seconds":10800,"total_minor":1450,"currency":"USD",
+   "line_items":[["Parking",1450]],"pay_nid":"n9","why":"..."}}
+- {{"action":"DONE","outcome":"paid","evidence_text":"receipt shown","why":"..."}}
+- {{"action":"ERROR","code":"UNEXPECTED_PAGE","message":"...","why":"..."}}
 
 How to act:
 - Address elements only by the "nid" given in the observation you were just shown. Never invent a nid, a CSS
