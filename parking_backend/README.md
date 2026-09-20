@@ -92,8 +92,35 @@ Three things work on the checkout's reCAPTCHA score, in descending order of effe
 
 Each run writes `<stamp>-0-warmup.txt` into `PARKING_DIAG_DIR`, recording which sites loaded and whether a
 Google session cookie was present. That file is how you confirm the sign-in actually reached Chrome; it records
-cookie names only, never values. If it says `google session cookie present: no` after you have signed in, the
-account is on the device but not in Chrome's own profile.
+cookie names only, never values.
+
+### Adding the account to Android is not signing Chrome in
+
+These are two separate things, and only the second one reCAPTCHA can see. `dumpsys account` can report an
+account while Chrome's cookie jar for google.com still holds only `AEC`, `NID`, `SEARCH_SAMESITE` and
+`__Secure-STRP` — the set a signed-out browser gets. A signed-in one also carries `SID`, `HSID`, `SSID`,
+`APISID`, `SAPISID` and `__Secure-1PSID`, which is what `GOOGLE_SESSION_COOKIES` looks for.
+
+To move the device account into the web session, in the mirrored emulator either turn on Chrome sign-in
+(Chrome -> menu -> Settings -> the account card at the top -> pick the account), which makes Chrome propagate
+it to Google's web properties, or open `accounts.google.com` in Chrome and sign in there, which sets the web
+cookies directly and does not depend on sync. The session is shared across google.com and youtube.com, so
+either entry point is enough. If the account card is missing, check that "Allow Chrome sign-in" is on under
+Settings -> Google services.
+
+### Checking it without buying anything
+
+`deploy/probe_browser.py` opens a session exactly as `LazAdapter` would, warms it, and reports the cookie
+state, `navigator.webdriver`, whether Cloudflare passed and which reCAPTCHA frames are present. It fills no
+field and never clicks PAY. Copy the package somewhere readable and run it on the VM as `parking-demo`:
+
+```bash
+PYTHONPATH=/tmp/proberoot PARKING_DIAG_DIR=/tmp/probe-diag \
+  /opt/parking-demo/.venv/bin/python /tmp/proberoot/parking_backend/deploy/probe_browser.py
+```
+
+`PARKING_PROBE_CHECKOUT=1` also walks GO -> NEXT to the checkout form and reports the frames there. Note that
+an invisible reCAPTCHA is only evaluated when PAY is clicked, so a clean report is encouraging but not proof.
 
 A visible challenge is now recognised rather than left to time out. Before PAY it raises `CaptchaChallenged`,
 which the worker records as `action_required` / `CAPTCHA_CHALLENGED` with nothing purchased, and snapshots
