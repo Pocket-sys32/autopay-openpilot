@@ -133,6 +133,13 @@ class TestWarmUp(unittest.TestCase):
       adapter()._warm_up(driver)  # must not raise: warming is not the purchase
       self.assertEqual(driver.visited, ["https://up.test/"])
 
+  def test_chrome_is_attached_to_by_default_so_the_session_survives(self):
+    # chromedriver's own relaunch clears Chrome's data directory, which signs the browser out before the
+    # first page loads; appium:noReset does not cover that.
+    self.assertTrue(adapter().attach_to_chrome)
+    with mock.patch.dict("os.environ", {"PARKING_LAZ_ATTACH_CHROME": "0"}):
+      self.assertFalse(adapter().attach_to_chrome)
+
   def test_the_budget_stops_the_warmup_before_the_worker_deadline(self):
     with mock.patch.dict("os.environ", {"PARKING_LAZ_WARMUP_URLS": "https://a.test/,https://b.test/",
                                         "PARKING_LAZ_WARMUP_BUDGET": "0"}):

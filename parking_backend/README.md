@@ -67,9 +67,21 @@ The scripts default to `parking-demo-vm` in `fieldscout-497018`/`us-west1-b`; ov
 `e2-medium` and never passed the VM gate above. scrcpy must be 2.x or newer: the emulator runs Android 15, which
 the version most distributions package does not support.
 
-The login persists: `-no-snapshot` only disables Quick Boot, so `userdata-qemu.img` keeps the account and the
-Chrome profile across restarts, and both adapters set `appium:noReset` so a session never clears them. Passing
-`-wipe-data`, recreating the AVD, or deleting that image throws the account away.
+The login survives an emulator restart: `-no-snapshot` only disables Quick Boot, so `userdata-qemu.img` keeps
+the account and the Chrome profile. Passing `-wipe-data`, recreating the AVD, or deleting that image throws the
+account away.
+
+What it does **not** survive by default is an automated run. `appium:noReset` only stops Appium resetting the
+app; chromedriver separately relaunches Chrome *with a cleared data directory*, which signs the browser out
+before the first page loads. `LazAdapter` therefore sets `androidUseRunningApp`, attaching to the Chrome that
+is already running instead of relaunching it. `PARKING_LAZ_ATTACH_CHROME=0` restores the old behaviour.
+
+Two consequences follow. Chrome has to be running on the device before an attempt, or the session cannot
+attach; rather than fall back to a launch, which would succeed while quietly signing the browser out, the
+adapter reports `action_required`. And attaching is incompatible with `PARKING_LAZ_INJECT_CF_COOKIES=1`, since
+matching the solver's user agent requires the relaunch that wipes the session — when that is on, it wins and
+the Google session is lost. The command-line arguments above are not applied while attached either, but
+`navigator.webdriver` stays false regardless, precisely because chromedriver did not launch the browser.
 
 The two gates are separate and want different things. Cloudflare, on the entry page, issues `cf_clearance` from
 IP reputation and browser fingerprint and never reads the Google session. reCAPTCHA, at the checkout, is the one

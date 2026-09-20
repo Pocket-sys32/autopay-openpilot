@@ -129,6 +129,7 @@ class LazAdapter:
     self.warmup_urls = (tuple(u.strip() for u in configured.split(",") if u.strip())
                         if configured is not None else DEFAULT_WARMUP_URLS)
     self.warmup_budget = int(os.getenv("PARKING_LAZ_WARMUP_BUDGET", "30"))
+    self.attach_to_chrome = os.getenv("PARKING_LAZ_ATTACH_CHROME", "1") == "1"
 
   def validate_location(self, location_id: str) -> bool:
     return location_id == LOCATION_ID
@@ -172,8 +173,25 @@ class LazAdapter:
     chrome_args = ["--disable-blink-features=AutomationControlled"]
     if solution and solution.get("userAgent"):
       chrome_args.append(f"--user-agent={solution['userAgent']}")
-    options.set_capability("appium:chromeOptions", {"args": chrome_args})
-    driver = webdriver.Remote(self.appium_url, options=options)
+    chrome_options: dict[str, object] = {"args": chrome_args}
+    # Left to itself, chromedriver relaunches Chrome with a cleared data directory, throwing away the signed-in
+    # Google session before the first page loads — and that session is what reCAPTCHA reads. Attaching to the
+    # running Chrome keeps the profile. The args above then do not apply, because Chrome is not restarted;
+    # navigator.webdriver is false anyway, precisely because chromedriver did not launch it.
+    # The two are mutually exclusive: matching the solver's user agent needs a relaunch, which wipes the
+    # session, so the Cloudflare cookie path wins wherever it is switched on.
+    attach = self.attach_to_chrome and solution is None
+    if attach:
+      chrome_options["androidUseRunningApp"] = True
+      chrome_options["androidPackage"] = "com.android.chrome"
+    options.set_capability("appium:chromeOptions", chrome_options)
+    try:
+      driver = webdriver.Remote(self.appium_url, options=options)
+    except Exception as exc:
+      if not attach:
+        raise
+      # Deliberately no fallback to a normal launch: that would succeed while silently signing the browser out.
+      raise FormChanged("could not attach to a running Chrome; open it on the device and check it is signed in") from exc
     driver.set_page_load_timeout(30)
     try:
       self._stamp = time.strftime("%Y%m%dT%H%M%S")

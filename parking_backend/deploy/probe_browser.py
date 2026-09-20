@@ -32,7 +32,14 @@ def main() -> None:
   options.set_capability("appium:newCommandTimeout", 150)
   options.set_capability("appium:noReset", True)
   options.set_capability("appium:chromedriverExecutable", CHROMEDRIVER_PATH)
-  options.set_capability("appium:chromeOptions", {"args": ["--disable-blink-features=AutomationControlled"]})
+  chrome_options: dict[str, object] = {"args": ["--disable-blink-features=AutomationControlled"]}
+  if os.getenv("PARKING_PROBE_ATTACH") == "1":
+    # chromedriver otherwise relaunches Chrome with a cleared data directory, which throws away the signed-in
+    # session before the page is ever loaded. Attaching to the running app keeps the profile; the command-line
+    # args above are not applied in that case, because Chrome is not restarted.
+    chrome_options["androidUseRunningApp"] = True
+    chrome_options["androidPackage"] = "com.android.chrome"
+  options.set_capability("appium:chromeOptions", chrome_options)
 
   driver = webdriver.Remote(probe.appium_url, options=options)
   driver.set_page_load_timeout(30)
