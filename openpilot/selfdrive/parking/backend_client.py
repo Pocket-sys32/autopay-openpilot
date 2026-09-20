@@ -65,13 +65,33 @@ class ParkingBackendClient:
   def get_attempt(self, attempt_id: str) -> BackendAttemptResponse:
     return self._request("GET", f"/v1/attempts/{attempt_id}")
 
+  def post_decision(self, attempt_id: str, decision: str, quote_hash: str) -> BackendAttemptResponse:
+    """Authorize or refuse a checkout. The quote hash binds this to the summary the driver actually saw."""
+    if decision not in ("confirm", "cancel"):
+      raise ValueError("decision must be confirm or cancel")
+    if len(quote_hash) != 64 or any(c not in "0123456789abcdef" for c in quote_hash):
+      raise ValueError("quote hash must be lowercase SHA-256 hex")
+    payload = {"schema_version": 1, "attempt_id": attempt_id, "decision": decision, "quote_hash": quote_hash}
+    return self._request("POST", f"/v1/attempts/{attempt_id}/decision", json=payload)
+
   def get_events(self, after_sequence: int) -> BackendAttemptResponse:
     if after_sequence < 0:
       raise ValueError("event sequence must be nonnegative")
     return self._request("GET", f"/v1/events?after={after_sequence}", request_timeout=max(35.0, self.timeout_seconds))
 
+  def decode_snapshot(self, jpeg: bytes, stream_id: str) -> BackendAttemptResponse:
+    if not jpeg or len(jpeg) > 768 * 1024:
+      raise ValueError("parking snapshot must be between 1 byte and 768 KiB")
+    if stream_id not in ("narrow", "wide"):
+      raise ValueError("unsupported camera stream")
+    return self._request(
+      "POST", "/v1/qr/decode", data=jpeg,
+      headers_extra={"Content-Type": "image/jpeg", "X-Parking-Camera": stream_id},
+    )
+
   def _request(self, method: str, path: str, **kwargs) -> BackendAttemptResponse:
     headers = {"Accept": "application/json", "X-Parking-Environment": self.environment}
+    headers.update(kwargs.pop("headers_extra", {}))
     if self.auth_header:
       headers["Authorization"] = self.auth_header
     try:

@@ -14,7 +14,8 @@ from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent, TextAlignment, TextAlignmentVertical
 from openpilot.system.ui.widgets.label import UnifiedLabel
 from openpilot.system.ui.widgets import Widget
-from openpilot.selfdrive.ui.mici.parking_overlay import draw_parking_banner, parking_test_mode_active
+from openpilot.selfdrive.ui.mici.parking_confirm import update_parking_confirmation
+from openpilot.selfdrive.ui.mici.parking_overlay import draw_parking_status
 from openpilot.common.filter_simple import BounceFilter
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
@@ -232,7 +233,11 @@ class AugmentedRoadView(CameraView):
                                                alert_to_render.visual_alert == car.CarControl.HUDControl.VisualAlert.steerRequired)
     self._alert_renderer.render(self._content_rect)
     self._hud_renderer.render(self._content_rect)
-    draw_parking_banner(self._content_rect.x, self._content_rect.y)
+    # Native alerts are safety-critical and always take visual priority.
+    if alert_to_render is None:
+      draw_parking_status(self._content_rect)
+    # A checkout is waiting on the driver; the dialog raises itself once per attempt.
+    update_parking_confirmation()
 
     # Draw fake rounded border
     rl.draw_rectangle_rounded_lines_ex(self._content_rect, 0.2 * 1.02, 10, 50, rl.BLACK)
@@ -247,9 +252,7 @@ class AugmentedRoadView(CameraView):
     self._bookmark_icon.render(self.rect)
 
   def _switch_stream_if_needed(self, sm):
-    if parking_test_mode_active() and WIDE_CAM in self.available_streams:
-      target = WIDE_CAM
-    elif sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
+    if sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
       v_ego = sm['carState'].vEgo
       if v_ego < WIDE_CAM_MAX_SPEED:
         target = WIDE_CAM

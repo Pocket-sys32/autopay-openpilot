@@ -55,6 +55,7 @@ class AttemptState(StrEnum):
   AUTHORIZED = "authorized"
   DISPATCHING = "dispatching"
   PENDING = "pending"
+  AWAITING_CONFIRMATION = "awaiting_confirmation"
   ACTION_REQUIRED = "action_required"
   UNKNOWN = "unknown"
   ACTIVE = "active"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import time
 from types import SimpleNamespace
 from typing import Any, Protocol
 import uuid
+from urllib.parse import urlsplit
 
 from opendbc.car.structs import car
 
@@ -19,7 +21,8 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import Ratekeeper
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.parking.backend_client import BackendAttemptResponse, BackendClientError, ParkingBackendClient
-from openpilot.selfdrive.parking.candidate import CandidateRejected, CONTROLLED_FORM_ID, parse_candidate
+from openpilot.selfdrive.parking.candidate import (CandidateRejected, CONTROLLED_FORM_ID, GENERIC_PROVIDER_ID,
+                                                   LAZ_DURATION_SECONDS, LAZ_PROVIDER_ID, PROVIDER_ID, parse_candidate)
 from openpilot.selfdrive.parking.evidence import IgnitionEdgeTracker, VehicleEvidence
 from openpilot.selfdrive.parking.intent import IntentConfig, IntentProfile, IntentState, evaluate_intent
 from openpilot.selfdrive.parking.journal import ParkingJournal
@@ -32,6 +35,7 @@ from openpilot.selfdrive.parking.qr_detector import CandidateConsensus, QRScan, 
 CANDIDATE_TTL_NS = 30_000_000_000
 COUNTDOWN_NS = 5_000_000_000
 ROLLING_SUBMIT_MPS = 0.894  # 2 mph
+MAX_SNAPSHOT_SPEED_MPS = 15 / 3.6  # 15 km/h parking approach.
 POLL_INTERVAL_NS = 2_000_000_000
 SUPPORTED_DURATIONS = (3600, 7200)
 TERMINAL_REMOTE_STATES = frozenset({"succeeded", "failed", "expired", "action_required", "unknown"})
@@ -45,23 +49,40 @@ class Backend(Protocol):
   def put_attempt(self, attempt_id: str, payload: dict[str, Any]) -> BackendAttemptResponse: ...
   def get_attempt(self, attempt_id: str) -> BackendAttemptResponse: ...
   def get_events(self, after_sequence: int) -> BackendAttemptResponse: ...
+  def decode_snapshot(self, jpeg: bytes, stream_id: str) -> BackendAttemptResponse: ...
+
+
+SIM_DRIVE_MPS = 11.176  # 25 mph
 
 
 class SimulatedParkedSignals:
-  """Development-only parked evidence for camera testing without a vehicle."""
+  """Development-only vehicle evidence for camera testing without a vehicle."""
 
-  def __init__(self):
+  def __init__(self, params: Params | None = None):
+    self.params = params
     self.seen = {"carState": True, "pandaStates": True}
     self.alive = {"carState": True, "pandaStates": True}
     self.valid = {"carState": True, "pandaStates": True}
     self.recv_time = {"carState": 0.0, "pandaStates": 0.0}
     self.car_state = SimpleNamespace(canValid=True, canTimeout=False, vEgo=0.0, standstill=True,
                                      gearShifter=car.CarState.GearShifter.park, parkingBrake=True, doorOpen=False)
+    self._sync_motion()
+
+  def _parked(self) -> bool:
+    return True if self.params is None else self.params.get_bool("ParkingTestParked")
+
+  def _sync_motion(self) -> None:
+    parked = self._parked()
+    self.car_state.vEgo = 0.0 if parked else SIM_DRIVE_MPS
+    self.car_state.standstill = parked
+    self.car_state.gearShifter = car.CarState.GearShifter.park if parked else car.CarState.GearShifter.drive
+    self.car_state.parkingBrake = parked
 
   def __getitem__(self, service: str):
     return self.car_state if service == "carState" else ()
 
   def update(self, _timeout: int) -> None:
+    self._sync_motion()
     now = time.monotonic() - 0.01
     self.recv_time["carState"] = now
     self.recv_time["pandaStates"] = now
@@ -69,9 +90,9 @@ class SimulatedParkedSignals:
 
 def parking_test_mode_enabled(params: Params) -> bool:
   requested = params.get_bool("ParkingTestMode")
-  if requested and params.get_bool("IsReleaseBranch"):
+  if requested and (params.get_bool("IsReleaseBranch") or not params.get_bool("IsOffroad")):
     params.put_bool("ParkingTestMode", False, block=True)
-    cloudlog.error("refusing ParkingTestMode on a release branch")
+    cloudlog.error("refusing ParkingTestMode on a release branch or with vehicle onroad")
     return False
   return requested
 
@@ -126,9 +147,8 @@ def vehicle_evidence_from_sm(sm: messaging.SubMaster, ignition_tracker: Ignition
 class ParkingDaemon:
   def __init__(self, *, params: Params | None = None, scanner: QRScanner | None = None,
                journal_path: str | Path | None = None, sm=None, pm=None,
-               backend: Backend | None = None):
+               backend: Backend | None = None, prefer_wide: bool = False):
     self.params = params or Params()
-    self.scanner = scanner or VisionQRScanner()
     configured_path = os.getenv("PARKING_JOURNAL_PATH")
     params_path = self.params.get("ParkingJournalPath") or ""
     self.journal_path = Path(
@@ -152,6 +172,7 @@ class ParkingDaemon:
     self.last_poll_ns = 0
     self.last_event_sequence = 0
     self._backend_override = backend
+    self.scanner = scanner or VisionQRScanner(backend_provider=self._backend, prefer_wide=prefer_wide)
     self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="parking-backend")
     self._future: Future[BackendAttemptResponse] | None = None
     self._future_operation = ""
@@ -164,21 +185,25 @@ class ParkingDaemon:
     """Keep the production on-road HUD alive without starting selfdrived."""
     if hasattr(self.pm, "sock") and "selfdriveState" not in self.pm.sock:
       return
+    parked = self.params.get_bool("ParkingTestParked")
+    v_ego = 0.0 if parked else SIM_DRIVE_MPS
     ss_msg = messaging.new_message("selfdriveState")
     ss_msg.valid = True
-    ss_msg.selfdriveState.state = log.SelfdriveState.OpenpilotState.disabled
-    ss_msg.selfdriveState.enabled = False
-    ss_msg.selfdriveState.active = False
-    ss_msg.selfdriveState.engageable = False
+    ss_msg.selfdriveState.state = (log.SelfdriveState.OpenpilotState.disabled if parked else
+                                   log.SelfdriveState.OpenpilotState.enabled)
+    ss_msg.selfdriveState.enabled = not parked
+    ss_msg.selfdriveState.active = not parked
+    ss_msg.selfdriveState.engageable = True
     ss_msg.selfdriveState.experimentalMode = True
     self.pm.send("selfdriveState", ss_msg)
     cs_msg = messaging.new_message("carState")
     cs_msg.valid = True
-    cs_msg.carState.vEgo = 0.0
-    cs_msg.carState.vEgoCluster = 0.0
-    cs_msg.carState.standstill = True
-    cs_msg.carState.gearShifter = car.CarState.GearShifter.park
-    cs_msg.carState.parkingBrake = True
+    cs_msg.carState.vEgo = v_ego
+    cs_msg.carState.vEgoCluster = v_ego
+    cs_msg.carState.standstill = parked
+    cs_msg.carState.gearShifter = car.CarState.GearShifter.park if parked else car.CarState.GearShifter.drive
+    cs_msg.carState.parkingBrake = parked
+    cs_msg.carState.vCruiseCluster = 0.0 if parked else 55.0
     cs_msg.carState.canValid = True
     self.pm.send("carState", cs_msg)
 
@@ -239,12 +264,19 @@ class ParkingDaemon:
     scan = self.scanner.poll(now_ns)
     if scan is None:
       return
-    self.candidate_ambiguous = scan.ambiguous
+    # Snapshot responses arrive asynchronously; do not revive stale captures.
+    if scan.observations and any(not 0 <= now_ns - observation.observed_mono_ns <= self.consensus.window_ns
+                                 for observation in scan.observations):
+      return
+    if scan.ambiguous or (self.candidate is not None and any(
+      hashlib.sha256(value.encode()).hexdigest() != self.candidate.payload_sha256 for value in scan.payloads
+    )):
+      self.candidate_ambiguous = True
     payload = self.consensus.observe(scan, now_ns)
     if payload is None:
       return
     try:
-      candidate = parse_candidate(payload, observed_mono_ns=now_ns)
+      candidate = parse_candidate(payload, observed_mono_ns=min(observation.observed_mono_ns for observation in scan.observations))
     except CandidateRejected:
       self.last_reason = "UNSUPPORTED_QR"
       return
@@ -259,11 +291,61 @@ class ParkingDaemon:
     self.candidate_ambiguous = False
     self.last_reason = "CANDIDATE_CONFIRMED"
 
+  def _remote_state(self) -> str:
+    return str(self.remote.get("state", "")) if self.remote else ""
+
+  @property
+  def _confirmation(self) -> dict[str, object] | None:
+    """The checkout summary the backend is holding open, or None. It arrives on the ordinary attempt poll."""
+    if self._remote_state() != "confirmation_required" or not self.remote:
+      return None
+    value = self.remote.get("confirmation")
+    return value if isinstance(value, dict) and value.get("quote_hash") else None
+
+  def _provider_display_name(self) -> str:
+    if self._is_laz():
+      return "LAZ Parking"
+    if self._is_generic():
+      confirmation = self._confirmation or {}
+      merchant = str(confirmation.get("merchant") or "")
+      return merchant or (self._location_id() or "Parking")
+    return "Google Form demo"
+
   def _candidate_valid(self, now_ns: int) -> bool:
     return self.candidate is not None and not self.candidate_ambiguous and 0 <= now_ns - self.candidate.observed_mono_ns <= CANDIDATE_TTL_NS
 
+  def _provider_id(self) -> str:
+    if self.candidate is not None:
+      return self.candidate.provider_id
+    return self._request.quote.provider_id if self._request is not None else PROVIDER_ID
+
+  def _is_laz(self) -> bool:
+    return self._provider_id() == LAZ_PROVIDER_ID
+
+  def _is_generic(self) -> bool:
+    return self._provider_id() == GENERIC_PROVIDER_ID
+
+  def _location_id(self) -> str:
+    """What the backend keys the adapter on: a LAZ location, the generic URL's host, or the demo form."""
+    if self.candidate is None:
+      return self._request.quote.location_id if self._request is not None else CONTROLLED_FORM_ID
+    if self._is_laz():
+      return self.candidate.location_hint
+    if self._is_generic():
+      return urlsplit(self.candidate.location_hint).hostname or ""
+    return CONTROLLED_FORM_ID
+
+  def _max_total_minor(self) -> int:
+    cap = self.params.get("ParkingMaxTotalMinor", return_default=True)
+    return cap if isinstance(cap, int) and 1 <= cap <= 20_000 else 3000
+
   def _duration(self) -> int:
+    if self._is_laz():
+      return LAZ_DURATION_SECONDS  # LAZ's shortest stay at this site
     duration = self.params.get("ParkingDefaultDuration", return_default=True)
+    if self._is_generic():
+      # An unknown provider has no fixed menu; the agent still has to find this duration on the page.
+      return duration if isinstance(duration, int) and 300 <= duration <= 86_400 and not duration % 60 else 3600
     return duration if isinstance(duration, int) and duration in SUPPORTED_DURATIONS else 3600
 
   def _publish(self, state: ParkingDisplayState) -> None:
@@ -277,8 +359,8 @@ class ParkingDaemon:
 
   def _make_request(self, plate: str, duration: int, now_ns: int, now_ms: int) -> AttemptRequest:
     assert self.candidate is not None
-    quote = Quote(f"demo-{duration}", self.candidate.provider_id, CONTROLLED_FORM_ID, plate,
-                  BillingMode.FIXED_DURATION, duration, 0, 0, "USD", now_ms + 30_000, now_ms + 30_000, 7200)
+    quote = Quote(f"demo-{duration}", self.candidate.provider_id, self._location_id(), plate,
+                  BillingMode.FIXED_DURATION, duration, 0, 0, "USD", now_ms + 30_000, now_ms + 30_000, max(7200, duration))
     request = AttemptRequest(self.attempt_id, self.episode_id, quote, 1, now_ms + 30_000, "approve")
     with ParkingJournal(self.journal_path) as journal:
       journal.create_episode(self.episode_id, created_wall_ms=now_ms, created_mono_ns=now_ns)
@@ -288,9 +370,20 @@ class ParkingDaemon:
 
   def _wire_payload(self, request: AttemptRequest, evidence: VehicleEvidence, now_ns: int) -> dict[str, object]:
     assert self.candidate is not None
+    payer: dict[str, object] = {}
+    if request.quote.provider_id == LAZ_PROVIDER_ID:
+      payer = {"payer_first_name": self.params.get("ParkingFirstName") or "",
+               "payer_last_name": self.params.get("ParkingLastName") or "",
+               "name_on_card": self.params.get("ParkingNameOnCard") or ""}
+    generic: dict[str, object] = {}
+    if request.quote.provider_id == GENERIC_PROVIDER_ID:
+      generic = {"qr_url": self.candidate.location_hint, "max_total_minor": self._max_total_minor()}
     return {
-      "schema_version": 1, "environment": "demo", "attempt_id": request.attempt_id, "episode_id": request.episode_id,
-      "provider_id": request.quote.provider_id, "form_id": CONTROLLED_FORM_ID,
+      **payer,
+      **generic,
+      "schema_version": 2 if generic else 1,
+      "environment": "demo", "attempt_id": request.attempt_id, "episode_id": request.episode_id,
+      "provider_id": request.quote.provider_id, "form_id": request.quote.location_id,
       "qr_payload_sha256": self.candidate.payload_sha256, "plate": request.quote.plate,
       "plate_country": self.params.get("ParkingPlateCountry") or "", "plate_region": self.params.get("ParkingPlateRegion") or "",
       "duration_seconds": request.quote.duration_seconds,
@@ -311,6 +404,38 @@ class ParkingDaemon:
     self._future_operation = "put"
     self._future = self._executor.submit(backend.put_attempt, self.attempt_id, payload)
     self.last_reason = "BACKEND_DISPATCHING"
+
+  def _publish_pending_confirmation(self, confirmation: dict[str, object] | None) -> None:
+    """Hand the UI exactly what it should render. Cleared as soon as the checkout is no longer open."""
+    if confirmation is None:
+      if self.params.get("ParkingPendingConfirmation"):
+        self.params.remove("ParkingPendingConfirmation")
+      return
+    self.params.put("ParkingPendingConfirmation", {"attempt_id": self.attempt_id, **confirmation}, block=True)
+
+  def _start_decision(self, decision: str, quote_hash: str, now_ns: int) -> None:
+    backend = self._backend()
+    if backend is None or not self.attempt_id:
+      return
+    self.last_poll_ns = now_ns
+    self._future_operation = "decision"
+    self._future = self._executor.submit(backend.post_decision, self.attempt_id, decision, quote_hash)
+    self.last_reason = "USER_CONFIRMED" if decision == "confirm" else "USER_DECLINED"
+
+  def _consume_decision_params(self, now_ns: int) -> bool:
+    """Turn a button press into a decision. Returns True when one was dispatched."""
+    confirmation = self._confirmation
+    if confirmation is None or self._future is not None:
+      return False
+    confirm = self.params.get_bool("ParkingConfirmRequested")
+    cancel = self.params.get_bool("ParkingCancelRequested")
+    if not confirm and not cancel:
+      return False
+    self.params.put_bool("ParkingConfirmRequested", False, block=True)
+    self.params.put_bool("ParkingCancelRequested", False, block=True)
+    # Cancel wins a simultaneous press: refusing to spend is always the safe reading.
+    self._start_decision("cancel" if cancel else "confirm", str(confirmation["quote_hash"]), now_ns)
+    return True
 
   def _start_poll(self, now_ns: int) -> None:
     backend = self._backend()
@@ -342,6 +467,7 @@ class ParkingDaemon:
         return
       self.remote = response.body
       state = str(response.body.get("state", ""))
+      # A decision response carries the same body shape, but must not re-run the put bookkeeping.
       if operation == "put":
         with ParkingJournal(self.journal_path) as journal:
           journal.transition_attempt(self.attempt_id, AttemptState.PENDING, reason_code="BACKEND_ACCEPTED", mono_ns=now_ns, wall_ms=now_ms)
@@ -362,7 +488,8 @@ class ParkingDaemon:
       result = OperationResult(AttemptState.ACTIVE, PaymentStatus.NOT_ATTEMPTED, ParkingStatus.ACTIVE,
                                str(body.get("reason_code", "DEMO_FORM_CONFIRMED")),
                                DemoReceipt(self.attempt_id, now_ms, now_ms + duration * 1000, duration))
-      phase, message = "completed", "Demo completed — no parking purchased."
+      phase = "completed"
+      message = "Parking paid." if self._is_laz() else "Demo completed — no parking purchased."
     elif state == "unknown":
       result = OperationResult(AttemptState.UNKNOWN, PaymentStatus.UNKNOWN, ParkingStatus.UNKNOWN,
                                str(body.get("reason_code", "FORM_RESULT_UNKNOWN")))
@@ -378,7 +505,12 @@ class ParkingDaemon:
     else:
       result = OperationResult(AttemptState.FAILED_DEFINITIVELY, PaymentStatus.NOT_ATTEMPTED, ParkingStatus.NONE,
                                str(body.get("reason_code", "FAILED")))
-      phase, message = "failed", "Demo submission failed before the form was submitted."
+      phase = "failed"
+      reason_code = str(body.get("reason_code"))
+      message = {
+        "PAYMENT_DECLINED": "Payment declined. Nothing was purchased.",
+        "RESERVATION_REJECTED": "LAZ rejected the reservation. Nothing was purchased.",
+      }.get(reason_code, "Demo submission failed before the form was submitted.")
     try:
       with ParkingJournal(self.journal_path) as journal:
         if result.attempt_state in (AttemptState.UNKNOWN, AttemptState.ACTION_REQUIRED):
@@ -407,6 +539,10 @@ class ParkingDaemon:
       else:
         phase = "failed"
       reason = str(self.result["reason_code"])
+    elif self._confirmation is not None:
+      phase, reason = "confirm", "AWAITING_USER_CONFIRMATION"
+    elif self._remote_state() == "committing":
+      phase, reason = "committing", "USER_CONFIRMED"
     elif self.countdown_deadline_ns is not None:
       phase, reason = "countdown", "COUNTDOWN_ACTIVE"
     elif self._request is not None:
@@ -417,14 +553,22 @@ class ParkingDaemon:
       phase, reason = "scanning", self.last_reason
     updated_value = self.remote.get("updated_unix_ms", 0) if self.remote else 0
     updated_ms = updated_value if isinstance(updated_value, int) and not isinstance(updated_value, bool) else 0
+    confirmation = self._confirmation or {}
+    if confirmation:
+      duration = int(confirmation.get("duration_seconds") or duration)
     return ParkingDisplayState(
       phase=phase, reason_code=reason, environment="demo", episode_id=self.episode_id, attempt_id=self.attempt_id,
-      provider_display_name="Google Form demo" if self.candidate is not None or self._request is not None else "",
-      zone_display="controlled demo", plate=plate, duration_seconds=duration, amount_minor=0, currency="USD",
+      provider_display_name=self._provider_display_name() if self.candidate is not None or self._request is not None else "",
+      zone_display=str(confirmation.get("location_label") or "controlled demo"),
+      plate=plate, duration_seconds=duration,
+      amount_minor=int(confirmation.get("total_minor") or 0),
+      currency=str(confirmation.get("currency") or "USD"),
       payment_status="not_attempted" if self.result is None else str(self.result["payment_status"]),
       parking_status="none" if self.result is None else str(self.result["parking_status"]),
-      requires_user_action=phase in ("action_required", "unknown"),
-      action_expires_at_unix_ms=(now_ms + max(0, self.countdown_deadline_ns - now_ns) // 1_000_000) if self.countdown_deadline_ns else 0,
+      requires_user_action=phase in ("action_required", "unknown", "confirm"),
+      action_expires_at_unix_ms=(int(confirmation.get("expires_at_unix_ms") or 0) if confirmation else
+                                 ((now_ms + max(0, self.countdown_deadline_ns - now_ns) // 1_000_000)
+                                  if self.countdown_deadline_ns else 0)),
       last_transition_mono_ns=now_ns,
       last_backend_sync_unix_ms=updated_ms,
       candidate_present=self.candidate is not None, candidate_ambiguous=self.candidate_ambiguous,
@@ -468,10 +612,22 @@ class ParkingDaemon:
       return
     evidence = vehicle_evidence_from_sm(self.sm, self.ignition_tracker, now_ns)
     if self._request is not None:
-      if (self.result is not None and evidence.car_signal_usable(now_mono_ns=now_ns,
-                                                                 maximum_age_ns=self.intent_config.evidence_maximum_age_ns) and
-          abs(evidence.v_ego_mps or 0.0) > ROLLING_SUBMIT_MPS):
+      rolling = (evidence.car_signal_usable(now_mono_ns=now_ns,
+                                            maximum_age_ns=self.intent_config.evidence_maximum_age_ns) and
+                 abs(evidence.v_ego_mps or 0.0) > ROLLING_SUBMIT_MPS)
+      if self.result is not None and rolling:
         self._reset_episode()
+        self._publish(self._display(plate, now_ns, now_ms))
+        return
+      confirmation = self._confirmation
+      self._publish_pending_confirmation(confirmation)
+      if confirmation is not None and rolling:
+        # The car drove off while the driver was deciding. Never pay for parking it is leaving.
+        self.params.put_bool("ParkingCancelRequested", False, block=True)
+        self._start_decision("cancel", str(confirmation["quote_hash"]), now_ns)
+        self._publish(self._display(plate, now_ns, now_ms))
+        return
+      if self._consume_decision_params(now_ns):
         self._publish(self._display(plate, now_ns, now_ms))
         return
       if self.result is None and self._future is None and now_ns - self.last_poll_ns >= POLL_INTERVAL_NS:
@@ -484,9 +640,17 @@ class ParkingDaemon:
 
     if (self.episode_id and evidence.car_signal_usable(now_mono_ns=now_ns,
                                                        maximum_age_ns=self.intent_config.evidence_maximum_age_ns) and
-        abs(evidence.v_ego_mps or 0.0) > ROLLING_SUBMIT_MPS):
+        abs(evidence.v_ego_mps or 0.0) > MAX_SNAPSHOT_SPEED_MPS):
       self._reset_episode()
-    self._observe_camera(now_ns)
+    # QR signs are useful during the low-speed approach to parking. This gate
+    # avoids continuous road-camera uploads during ordinary driving while
+    # covering a normal parking approach and the full stopped period.
+    if (evidence.car_signal_usable(now_mono_ns=now_ns,
+                                   maximum_age_ns=self.intent_config.evidence_maximum_age_ns) and
+        abs(evidence.v_ego_mps or 0.0) <= MAX_SNAPSHOT_SPEED_MPS):
+      self._observe_camera(now_ns)
+    else:
+      self.last_reason = "WAITING_FOR_LOW_SPEED"
     decision = evaluate_intent(self.intent_state, evidence, self.intent_config, now_mono_ns=now_ns, candidate_valid=self._candidate_valid(now_ns))
     self.intent_state, self.last_reason = decision.state, decision.reason.value
     if not decision.parked:
@@ -535,15 +699,15 @@ def _configure_runtime(daemon: ParkingDaemon, test_mode: bool) -> None:
   daemon.intent_config = IntentConfig(
     IntentProfile.AUTOMATIC,
     stationary_speed_mps=ROLLING_SUBMIT_MPS,
-    stationary_debounce_ns=0 if test_mode else 5_000_000_000,
+    stationary_debounce_ns=5_000_000_000,
   )
 
 
 def main() -> None:
   params = Params()
   test_mode = parking_test_mode_enabled(params)
-  daemon = ParkingDaemon(params=params, scanner=VisionQRScanner(prefer_wide=test_mode),
-                         sm=SimulatedParkedSignals() if test_mode else None,
+  daemon = ParkingDaemon(params=params, prefer_wide=test_mode,
+                         sm=SimulatedParkedSignals(params) if test_mode else None,
                          pm=parking_test_pubmaster(test_mode))
   _configure_runtime(daemon, test_mode)
   ratekeeper = Ratekeeper(5.0 if test_mode else 2.0, print_delay_threshold=0.25)
@@ -552,8 +716,8 @@ def main() -> None:
       requested_test_mode = parking_test_mode_enabled(params)
       if requested_test_mode != test_mode:
         test_mode = requested_test_mode
-        daemon = ParkingDaemon(params=params, scanner=VisionQRScanner(prefer_wide=test_mode),
-                               sm=SimulatedParkedSignals() if test_mode else None,
+        daemon = ParkingDaemon(params=params, prefer_wide=test_mode,
+                               sm=SimulatedParkedSignals(params) if test_mode else None,
                                pm=parking_test_pubmaster(test_mode))
         _configure_runtime(daemon, test_mode)
         ratekeeper = Ratekeeper(5.0 if test_mode else 2.0, print_delay_threshold=0.25)
