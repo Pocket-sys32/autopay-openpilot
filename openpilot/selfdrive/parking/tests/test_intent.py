@@ -100,6 +100,28 @@ class TestParkingIntent(unittest.TestCase):
                                 candidate_valid=True, user_confirmed=True)
     self.assertTrue(confirmed.parked)
 
+  def test_gps_demo_requires_accurate_near_stop_and_debounce(self):
+    config = IntentConfig(IntentProfile.GPS_DEMO, stationary_speed_mps=0.25,
+                          stationary_debounce_ns=5, evidence_maximum_age_ns=10)
+    gps = evidence(10, car_state_fresh=False, gps_speed_mps=0.1,
+                   gps_captured_mono_ns=10, gps_speed_accuracy_mps=0.2)
+    first = evaluate_intent(IntentState(), gps, config, now_mono_ns=10, candidate_valid=True)
+    self.assertEqual(first.reason, IntentReason.DEBOUNCING)
+    parked = evaluate_intent(first.state, gps, config, now_mono_ns=15, candidate_valid=True)
+    self.assertTrue(parked.parked)
+
+    moving = evaluate_intent(IntentState(), evidence(
+      20, car_state_fresh=False, gps_speed_mps=1.0,
+      gps_captured_mono_ns=20, gps_speed_accuracy_mps=0.2,
+    ), config, now_mono_ns=20, candidate_valid=True)
+    self.assertEqual(moving.reason, IntentReason.VEHICLE_MOVING)
+
+    inaccurate = evaluate_intent(IntentState(), evidence(
+      20, car_state_fresh=False, gps_speed_mps=0.0,
+      gps_captured_mono_ns=20, gps_speed_accuracy_mps=1.5,
+    ), config, now_mono_ns=20, candidate_valid=True)
+    self.assertEqual(inaccurate.reason, IntentReason.STALE_VEHICLE_EVIDENCE)
+
   def test_ignition_profile_requires_true_edge_and_fresh_panda(self):
     config = IntentConfig(IntentProfile.IGNITION_OFF, stationary_debounce_ns=0)
     no_edge = evaluate_intent(IntentState(), evidence(10, ignition_known=True, ignition_on=False,

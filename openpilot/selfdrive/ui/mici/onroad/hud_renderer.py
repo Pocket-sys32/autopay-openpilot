@@ -149,7 +149,14 @@ class HudRenderer(Widget):
   def _update_state(self) -> None:
     """Update HUD state based on car state and controls state."""
     sm = ui_state.sm
-    if sm.recv_frame["carState"] < ui_state.started_frame:
+    gps_speed = None
+    if ui_state.params.get_bool("ParkingG82ModeEnabled"):
+      for service in ("gpsLocationExternal", "gpsLocation"):
+        if (sm.seen[service] and sm.alive[service] and sm.valid[service] and sm[service].hasFix and
+            0 <= sm[service].speedAccuracy <= 1.0):
+          gps_speed = float(sm[service].speed)
+          break
+    if sm.recv_frame["carState"] < ui_state.started_frame and gps_speed is None:
       self.is_cruise_set = False
       self.set_speed = SET_SPEED_NA
       self.speed = 0.0
@@ -174,7 +181,7 @@ class HudRenderer(Widget):
 
     v_ego_cluster = car_state.vEgoCluster
     self.v_ego_cluster_seen = self.v_ego_cluster_seen or v_ego_cluster != 0.0
-    v_ego = v_ego_cluster if self.v_ego_cluster_seen else car_state.vEgo
+    v_ego = gps_speed if gps_speed is not None else (v_ego_cluster if self.v_ego_cluster_seen else car_state.vEgo)
     speed_conversion = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
     self.speed = max(0.0, v_ego * speed_conversion)
 

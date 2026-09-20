@@ -27,10 +27,12 @@ class VehicleEvidence:
   ignition_on: bool | None = None
   explicit_ignition_edge: IgnitionEdge = IgnitionEdge.NONE
   gps_speed_mps: float | None = None
+  gps_captured_mono_ns: int | None = None
+  gps_speed_accuracy_mps: float | None = None
 
   def __post_init__(self) -> None:
     object.__setattr__(self, "explicit_ignition_edge", IgnitionEdge(self.explicit_ignition_edge))
-    for speed in (self.v_ego_mps, self.gps_speed_mps):
+    for speed in (self.v_ego_mps, self.gps_speed_mps, self.gps_speed_accuracy_mps):
       if speed is not None and not math.isfinite(speed):
         raise ValueError("speed must be finite")
 
@@ -38,6 +40,13 @@ class VehicleEvidence:
     age_ns = now_mono_ns - self.captured_mono_ns
     return (0 <= age_ns <= maximum_age_ns and self.car_state_fresh and self.can_valid and
             not self.can_timeout and self.v_ego_mps is not None)
+
+  def gps_signal_usable(self, *, now_mono_ns: int, maximum_age_ns: int,
+                        maximum_accuracy_mps: float = 1.0) -> bool:
+    if self.gps_captured_mono_ns is None or self.gps_speed_mps is None or self.gps_speed_accuracy_mps is None:
+      return False
+    age_ns = now_mono_ns - self.gps_captured_mono_ns
+    return 0 <= age_ns <= maximum_age_ns and 0 <= self.gps_speed_accuracy_mps <= maximum_accuracy_mps
 
 
 class IgnitionEdgeTracker:
@@ -57,4 +66,3 @@ class IgnitionEdgeTracker:
     if previous is False and ignition_on:
       return IgnitionEdge.OFF_TO_ON
     return IgnitionEdge.NONE
-

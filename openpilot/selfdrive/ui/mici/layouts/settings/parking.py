@@ -71,6 +71,14 @@ class ParkingLayoutMici(NavScroller):
   def __init__(self):
     super().__init__()
 
+    self._g82_mode_toggle = BigParamControl(
+      "G82 demo mode",
+      "ParkingG82ModeEnabled",
+      toggle_callback=self._on_g82_mode_toggled,
+      description="Use the comma GPS and road camera for parking detection without vehicle control.",
+    )
+    self._g82_mode_toggle.set_enabled(lambda: ui_state.is_offroad() or parking_test_mode_active())
+
     self._auto_pay_toggle = BigParamControl(
       "automatic parking payment",
       "ParkingAutoPayEnabled",
@@ -111,6 +119,7 @@ class ParkingLayoutMici(NavScroller):
     )
 
     self._scroller.add_widgets([
+      self._g82_mode_toggle,
       self._auto_pay_toggle,
       self._vehicle_button,
       self._payment_profile_button,
@@ -141,11 +150,18 @@ class ParkingLayoutMici(NavScroller):
       "unknown": "Couldn't confirm parking",
       "action_required": "Check your payment profile",
     }.get(parking.phase)
+    if ui_state.params.get_bool("ParkingG82ModeEnabled"):
+      status_text = {
+        "WAITING_FOR_LOW_SPEED": "Ready below 5 mph",
+        "STALE_VEHICLE_EVIDENCE": "Waiting for an accurate GPS fix",
+        "CANDIDATE_MISSING": "Scanning for a parking QR",
+      }.get(parking.reasonCode, status_text)
     if status_text:
       self._status.set_value(status_text)
 
   def _refresh(self):
     ui_state.update_params()
+    self._g82_mode_toggle.refresh()
     self._auto_pay_toggle.refresh()
     self._refresh_vehicle()
     self._refresh_payment_profile()
@@ -159,6 +175,10 @@ class ParkingLayoutMici(NavScroller):
       self._status.set_value(message)
     else:
       self._status.set_value("Ready" if backend_url else "Setup required")
+
+  def _on_g82_mode_toggled(self, enabled: bool):
+    if enabled:
+      ui_state.params.put("ParkingEnvironment", "demo", block=True)
 
   def _on_auto_pay_toggled(self, enabled: bool):
     if enabled and not ui_state.params.get("ParkingLicensePlate"):

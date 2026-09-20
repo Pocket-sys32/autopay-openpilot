@@ -35,6 +35,8 @@ from openpilot.selfdrive.parking.qr_detector import CandidateConsensus, QRScan, 
 CANDIDATE_TTL_NS = 30_000_000_000
 COUNTDOWN_NS = 5_000_000_000
 ROLLING_SUBMIT_MPS = 0.894  # 2 mph
+G82_SCAN_SPEED_MPS = 5 * 0.44704  # Begin QR scanning below 5 mph.
+G82_PARKED_SPEED_MPS = 0.5 * 0.44704  # Dispatch only after a near-stop.
 MAX_SNAPSHOT_SPEED_MPS = 15 / 3.6  # 15 km/h parking approach.
 POLL_INTERVAL_NS = 2_000_000_000
 SUPPORTED_DURATIONS = (3600, 7200)
@@ -127,6 +129,19 @@ def vehicle_evidence_from_sm(sm: messaging.SubMaster, ignition_tracker: Ignition
   signals = tuple((bool(p.ignitionLine), bool(p.ignitionCan)) for p in known_pandas)
   edge = ignition_tracker.observe(signals or None, fresh=panda_fresh)
   ignition_known = bool(signals)
+  gps_speed_mps: float | None = None
+  gps_captured_mono_ns: int | None = None
+  gps_speed_accuracy_mps: float | None = None
+  for service in ("gpsLocationExternal", "gpsLocation"):
+    if not (sm.seen.get(service, False) and sm.alive.get(service, False) and sm.valid.get(service, False)):
+      continue
+    gps = sm[service]
+    if not gps.hasFix:
+      continue
+    gps_speed_mps = float(gps.speed)
+    gps_speed_accuracy_mps = float(gps.speedAccuracy)
+    gps_captured_mono_ns = int(sm.recv_time[service] * 1e9)
+    break
   return VehicleEvidence(
     captured_mono_ns=captured_mono_ns,
     car_state_fresh=car_fresh,
@@ -141,6 +156,9 @@ def vehicle_evidence_from_sm(sm: messaging.SubMaster, ignition_tracker: Ignition
     ignition_known=ignition_known,
     ignition_on=any(a or b for a, b in signals) if ignition_known else None,
     explicit_ignition_edge=edge,
+    gps_speed_mps=gps_speed_mps,
+    gps_captured_mono_ns=gps_captured_mono_ns,
+    gps_speed_accuracy_mps=gps_speed_accuracy_mps,
   )
 
 
@@ -154,7 +172,7 @@ class ParkingDaemon:
     self.journal_path = Path(
       journal_path or configured_path or params_path or (Path(Paths.persist_root()) / "parking" / "parking.db"),
     )
-    self.sm = sm or messaging.SubMaster(["carState", "pandaStates"])
+    self.sm = sm or messaging.SubMaster(["carState", "pandaStates", "gpsLocationExternal", "gpsLocation"])
     self.pm = pm or messaging.PubMaster(["parkingState"])
     self.consensus = CandidateConsensus()
     self.ignition_tracker = IgnitionEdgeTracker()
@@ -180,6 +198,24 @@ class ParkingDaemon:
     self._local_state: AttemptState | None = None
     self._pending_payload: dict[str, object] | None = None
     self._restore_unresolved_attempt()
+
+  def _g82_mode(self) -> bool:
+    return self.params.get_bool("ParkingG82ModeEnabled")
+
+  def _sync_intent_config(self) -> None:
+    profile = IntentProfile.GPS_DEMO if self._g82_mode() else IntentProfile.AUTOMATIC
+    stationary_speed = G82_PARKED_SPEED_MPS if self._g82_mode() else ROLLING_SUBMIT_MPS
+    if self.intent_config.profile != profile or self.intent_config.stationary_speed_mps != stationary_speed:
+      self.intent_config = IntentConfig(profile, stationary_speed_mps=stationary_speed,
+                                        stationary_debounce_ns=5_000_000_000)
+      self.intent_state = IntentState()
+
+  def _motion_speed(self, evidence: VehicleEvidence, now_ns: int) -> float | None:
+    if self._g82_mode():
+      return (evidence.gps_speed_mps if evidence.gps_signal_usable(
+        now_mono_ns=now_ns, maximum_age_ns=self.intent_config.evidence_maximum_age_ns) else None)
+    return (evidence.v_ego_mps if evidence.car_signal_usable(
+      now_mono_ns=now_ns, maximum_age_ns=self.intent_config.evidence_maximum_age_ns) else None)
 
   def _publish_test_hud(self) -> None:
     """Keep the production on-road HUD alive without starting selfdrived."""
@@ -378,6 +414,7 @@ class ParkingDaemon:
     generic: dict[str, object] = {}
     if request.quote.provider_id == GENERIC_PROVIDER_ID:
       generic = {"qr_url": self.candidate.location_hint, "max_total_minor": self._max_total_minor()}
+    evidence_mono_ns = (evidence.gps_captured_mono_ns if self._g82_mode() else evidence.captured_mono_ns)
     return {
       **payer,
       **generic,
@@ -387,7 +424,7 @@ class ParkingDaemon:
       "qr_payload_sha256": self.candidate.payload_sha256, "plate": request.quote.plate,
       "plate_country": self.params.get("ParkingPlateCountry") or "", "plate_region": self.params.get("ParkingPlateRegion") or "",
       "duration_seconds": request.quote.duration_seconds,
-      "evidence_age_ms": max(0, (now_ns - evidence.captured_mono_ns) // 1_000_000),
+      "evidence_age_ms": max(0, (now_ns - (evidence_mono_ns or now_ns)) // 1_000_000),
       "dispatch_deadline_unix_ms": request.dispatch_deadline_unix_ms,
     }
 
@@ -611,10 +648,10 @@ class ParkingDaemon:
       self._publish(ParkingDisplayState(phase="action_required", reason_code=self.last_reason, requires_user_action=True))
       return
     evidence = vehicle_evidence_from_sm(self.sm, self.ignition_tracker, now_ns)
+    self._sync_intent_config()
+    motion_speed = self._motion_speed(evidence, now_ns)
     if self._request is not None:
-      rolling = (evidence.car_signal_usable(now_mono_ns=now_ns,
-                                            maximum_age_ns=self.intent_config.evidence_maximum_age_ns) and
-                 abs(evidence.v_ego_mps or 0.0) > ROLLING_SUBMIT_MPS)
+      rolling = motion_speed is not None and abs(motion_speed) > ROLLING_SUBMIT_MPS
       if self.result is not None and rolling:
         self._reset_episode()
         self._publish(self._display(plate, now_ns, now_ms))
@@ -638,16 +675,13 @@ class ParkingDaemon:
       self._publish(self._display(plate, now_ns, now_ms))
       return
 
-    if (self.episode_id and evidence.car_signal_usable(now_mono_ns=now_ns,
-                                                       maximum_age_ns=self.intent_config.evidence_maximum_age_ns) and
-        abs(evidence.v_ego_mps or 0.0) > MAX_SNAPSHOT_SPEED_MPS):
+    scan_speed_mps = G82_SCAN_SPEED_MPS if self._g82_mode() else MAX_SNAPSHOT_SPEED_MPS
+    if self.episode_id and motion_speed is not None and abs(motion_speed) > scan_speed_mps:
       self._reset_episode()
     # QR signs are useful during the low-speed approach to parking. This gate
     # avoids continuous road-camera uploads during ordinary driving while
     # covering a normal parking approach and the full stopped period.
-    if (evidence.car_signal_usable(now_mono_ns=now_ns,
-                                   maximum_age_ns=self.intent_config.evidence_maximum_age_ns) and
-        abs(evidence.v_ego_mps or 0.0) <= MAX_SNAPSHOT_SPEED_MPS):
+    if motion_speed is not None and abs(motion_speed) < scan_speed_mps:
       self._observe_camera(now_ns)
     else:
       self.last_reason = "WAITING_FOR_LOW_SPEED"

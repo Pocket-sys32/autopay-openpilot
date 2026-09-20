@@ -41,6 +41,24 @@ Write the bearer token to `/persist/parking/device-token` on comma four, owned b
 
 Keep `ParkingAutoPayEnabled` off until the VM's form and Gmail smoke tests succeed.
 
+### G82 display-only mode
+
+The BMW G82 is not an openpilot-supported control platform. `G82 demo mode` in the comma Parking settings
+therefore adds no steering, braking, or CAN integration; it runs only the parking presentation and payment
+pipeline. When both G82 mode and automatic parking payment are enabled, manager keeps the road camera and the
+available comma GPS service running. The HUD speed uses GPS, and parkingd follows this sequence:
+
+1. Above 5 mph: do not capture parking snapshots.
+2. Below 5 mph with an accurate GPS fix: scan the road camera for a QR and require two matching observations.
+3. Below 0.5 mph for five seconds: treat the car as near-stopped, then show the existing five-second countdown.
+4. For the exact allowlisted LAZ QR, run the deterministic LAZ adapter without a pay slider. The HUD reports
+   `Parking active`, `Payment declined`, or `Parking unavailable` from the backend result.
+5. Unknown HTTPS providers keep the quote-bound confirmation slider because their merchant and total are not
+   known until checkout.
+
+The device and VM price caps, host restrictions, changed-form checks, and CAPTCHA handling remain active in
+both modes. Enable G82 mode only while the comma is mounted as a display and its road camera has a clear view.
+
 ## Signing the emulator in to Google
 
 The VM has no display, and the page is loaded by Chrome *inside* the emulator, so the account has to be added

@@ -29,7 +29,7 @@ def ublox(started: bool, params: Params, CP: car.CarParams) -> bool:
   use_ublox = ublox_available()
   if use_ublox != params.get_bool("UbloxAvailable"):
     params.put_bool("UbloxAvailable", use_ublox, block=True)
-  return started and use_ublox
+  return (started or parking_g82(started, params, CP)) and use_ublox
 
 def joystick(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and params.get_bool("JoystickDebugMode")
@@ -47,7 +47,7 @@ def not_long_maneuver(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and not params.get_bool("LongitudinalManeuverMode")
 
 def qcomgps(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return started and not ublox_available()
+  return (started or parking_g82(started, params, CP)) and not ublox_available()
 
 def always_run(started: bool, params: Params, CP: car.CarParams) -> bool:
   return True
@@ -64,6 +64,9 @@ def livestream(started: bool, params: Params, CP: car.CarParams) -> bool:
 def parking_test_mode(started: bool, params: Params, CP: car.CarParams) -> bool:
   return not started and params.get_bool("ParkingTestMode") and not params.get_bool("IsReleaseBranch")
 
+def parking_g82(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return params.get_bool("ParkingG82ModeEnabled") and params.get_bool("ParkingAutoPayEnabled")
+
 def or_(*fns):
   return lambda *args: operator.or_(*(fn(*args) for fn in fns))
 
@@ -78,7 +81,8 @@ procs = [
   NativeProcess("stream_encoderd", "openpilot/system/loggerd", ["./encoderd", "--stream"], or_(livestream, notcar)),
   PythonProcess("logmessaged", "openpilot.system.logmessaged", always_run),
 
-  NativeProcess("camerad", "openpilot/system/camerad", ["./camerad"], or_(driverview, or_(livestream, parking_test_mode)), enabled=not WEBCAM),
+  NativeProcess("camerad", "openpilot/system/camerad", ["./camerad"],
+                or_(driverview, or_(livestream, or_(parking_test_mode, parking_g82))), enabled=not WEBCAM),
   PythonProcess("webcamerad", "openpilot.system.camerad.webcam.camerad", driverview, enabled=WEBCAM),
   PythonProcess("proclogd", "openpilot.system.proclogd", only_onroad, enabled=platform.system() != "Darwin"),
   PythonProcess("journald", "openpilot.system.journald", only_onroad, platform.system() != "Darwin"),

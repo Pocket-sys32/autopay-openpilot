@@ -59,12 +59,16 @@ def main() -> None:
       expires_ms = now_ms + max(0, int((duration - elapsed) * 1000))
     state = ParkingDisplayState(
       phase=phase,
-      reason_code=f"PREVIEW_{phase.upper()}",
+      reason_code="PAYMENT_DECLINED" if phase == "failed" else f"PREVIEW_{phase.upper()}",
       environment="demo",
       episode_id="preview-episode",
       attempt_id="preview-attempt",
-      provider_display_name="Example Garage" if phase in ("confirm", "committing") else "Google Form demo",
-      zone_display="123 Main St" if phase in ("confirm", "committing") else "controlled demo",
+      provider_display_name=("Example Garage" if phase in ("confirm", "committing") else
+                             "LAZ Parking" if phase in ("sending", "processing", "completed", "failed") else
+                             "Google Form demo"),
+      zone_display=("123 Main St" if phase in ("confirm", "committing") else
+                    "LAZ · CA1231" if phase in ("sending", "processing", "completed", "failed") else
+                    "controlled demo"),
       plate="DEMO123",
       duration_seconds=3600,
       amount_minor=1450 if phase in ("confirm", "committing") else 0,

@@ -12,6 +12,7 @@ class IntentProfile(StrEnum):
   PARK_GEAR = "park_gear"
   PARKING_BRAKE = "parking_brake"
   IGNITION_OFF = "ignition_off"
+  GPS_DEMO = "gps_demo"
 
 
 class IntentReason(StrEnum):
@@ -58,10 +59,17 @@ def evaluate_intent(state: IntentState, evidence: VehicleEvidence, config: Inten
   """Pure parked-intent reducer; absence/disconnect is never evidence of ignition-off."""
   if not candidate_valid:
     return IntentDecision(state if state.confirmed else IntentState(), False, IntentReason.CANDIDATE_MISSING)
-  if not evidence.car_signal_usable(now_mono_ns=now_mono_ns, maximum_age_ns=config.evidence_maximum_age_ns):
+  gps_mode = config.profile == IntentProfile.GPS_DEMO
+  signal_usable = (evidence.gps_signal_usable(now_mono_ns=now_mono_ns,
+                                              maximum_age_ns=config.evidence_maximum_age_ns)
+                   if gps_mode else
+                   evidence.car_signal_usable(now_mono_ns=now_mono_ns,
+                                              maximum_age_ns=config.evidence_maximum_age_ns))
+  if not signal_usable:
     return IntentDecision(state if state.confirmed else IntentState(), False, IntentReason.STALE_VEHICLE_EVIDENCE)
-  assert evidence.v_ego_mps is not None
-  if abs(evidence.v_ego_mps) >= config.stationary_speed_mps:
+  speed_mps = evidence.gps_speed_mps if gps_mode else evidence.v_ego_mps
+  assert speed_mps is not None
+  if abs(speed_mps) >= config.stationary_speed_mps:
     return IntentDecision(IntentState(), False, IntentReason.VEHICLE_MOVING)
 
   if state.confirmed:
@@ -98,6 +106,10 @@ def evaluate_intent(state: IntentState, evidence: VehicleEvidence, config: Inten
     qualifies = (evidence.panda_state_fresh and evidence.ignition_known and evidence.ignition_on is False and
                  evidence.explicit_ignition_edge == IgnitionEdge.ON_TO_OFF)
     missing_reason = IntentReason.IGNITION_EDGE_REQUIRED
+  elif config.profile == IntentProfile.GPS_DEMO:
+    # GPS-only mode is explicitly selected for unsupported display-only cars.
+    # A good fix plus the stationary debounce is the parking-intent signal.
+    qualifies = True
 
   if not qualifies:
     return IntentDecision(next_state, False, missing_reason)

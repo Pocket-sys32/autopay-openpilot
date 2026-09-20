@@ -16,7 +16,7 @@ from openpilot.selfdrive.parking.qr_detector import QRObservation, QRScan
 
 
 class FakeSubMaster:
-  def __init__(self, *, car_alive=True, panda_alive=True, panda_states=()):
+  def __init__(self, *, car_alive=True, panda_alive=True, panda_states=(), gps_speed_mps=None):
     self.seen = {"carState": True, "pandaStates": True}
     self.alive = {"carState": car_alive, "pandaStates": panda_alive}
     self.valid = {"carState": True, "pandaStates": True}
@@ -33,12 +33,22 @@ class FakeSubMaster:
       ),
       "pandaStates": panda_states,
     }
+    if gps_speed_mps is not None:
+      self.seen["gpsLocationExternal"] = True
+      self.alive["gpsLocationExternal"] = True
+      self.valid["gpsLocationExternal"] = True
+      self.recv_time["gpsLocationExternal"] = 10.0
+      self.data["gpsLocationExternal"] = SimpleNamespace(
+        hasFix=True, speed=gps_speed_mps, speedAccuracy=0.2,
+      )
 
   def __getitem__(self, service):
     return self.data[service]
 
   def update(self, _timeout):
     self.recv_time["carState"] = time.monotonic() - 0.01
+    if "gpsLocationExternal" in self.recv_time:
+      self.recv_time["gpsLocationExternal"] = time.monotonic() - 0.01
 
 
 class FakeScanner:
@@ -281,6 +291,35 @@ class TestParkingDaemonEvidence(OpenpilotTestCase):
       daemon.step()
       scanner.poll.assert_not_called()
       self.assertIsNone(daemon.candidate)
+
+  def test_g82_mode_scans_below_five_mph_and_dispatches_only_near_stopped(self):
+    from unittest.mock import Mock
+    from openpilot.selfdrive.parking.parkingd import G82_PARKED_SPEED_MPS
+
+    params = Params()
+    params.put("ParkingLicensePlate", "DEMO123", block=True)
+    params.put_bool("ParkingAutoPayEnabled", True, block=True)
+    params.put_bool("ParkingG82ModeEnabled", True, block=True)
+    scanner = Mock(wraps=FakeScanner())
+    sm = FakeSubMaster(car_alive=False, gps_speed_mps=3 * 0.44704)
+    with tempfile.TemporaryDirectory() as directory:
+      daemon = ParkingDaemon(params=params, scanner=scanner, journal_path=f"{directory}/parking.db",
+                             sm=sm, pm=FakePubMaster(), backend=FakeBackend())
+      daemon.step()
+      daemon.step()
+      self.assertIsNotNone(daemon.candidate)
+      self.assertEqual(daemon.intent_config.profile, IntentProfile.GPS_DEMO)
+      self.assertIsNone(daemon.countdown_deadline_ns)
+
+      sm.data["gpsLocationExternal"].speed = G82_PARKED_SPEED_MPS / 2
+      daemon.intent_config = IntentConfig(IntentProfile.GPS_DEMO,
+                                          stationary_speed_mps=G82_PARKED_SPEED_MPS,
+                                          stationary_debounce_ns=0)
+      daemon.step()
+      self.assertIsNotNone(daemon.countdown_deadline_ns)
+      daemon.countdown_deadline_ns = 0
+      daemon.step()
+      self.assertIsNotNone(daemon._request)
 
   def test_ambiguity_persists_through_empty_scan_and_stale_result(self):
     from unittest.mock import Mock
