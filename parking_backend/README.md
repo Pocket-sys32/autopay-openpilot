@@ -198,6 +198,10 @@ Each run writes bounded mode-0600 JSON metadata to `PARKING_AGENT_DIAG_DIR`: act
 screenshot usage, and Vertex token counts when the API reports them. Diagnostics retain at most 50 files and
 never contain DOM text, prompts, model replies, screenshots, profile values, or card values.
 
+In dry-run mode only, missing `PARKING_AGENT_CARD_*` fields fall back to the existing LAZ card settings so
+field classification can be tested. The deterministic dry-run gate still stops before PAY. With dry run off,
+there is no fallback: live generic payment requires the dedicated agent card settings.
+
 The model runs on Vertex AI as the VM's own service account, so there is no API key. `aiplatform.googleapis.com`
 is already enabled on the project, but the service account needs the role granted once:
 

@@ -10,6 +10,7 @@ from typing import Protocol, cast
 from parking_backend.appium_adapter import AndroidFormAdapter, FormChanged, SubmissionUnknown
 from parking_backend.config import Settings
 from parking_backend.agent.llm import LLMUnavailable
+from parking_backend.agent.secrets import SecretVault
 from parking_backend.agent.types import (AgentStuck, DryRunStop, InvariantDrift, OffDomain,
                                          UserInterventionRequired)
 from parking_backend.errors import CaptchaChallenged, PaymentDeclined, PriceLimitExceeded, ReservationRejected
@@ -24,6 +25,19 @@ class AutomationTimeout(TimeoutError):
 
 def intervention_reason(code: str) -> str:
   return "CAPTCHA_BLOCKED" if code == "CAPTCHA" else code
+
+
+def agent_vault(settings: Settings) -> SecretVault:
+  """Use another adapter's card only for a run that is structurally unable to click PAY."""
+  dry_run_card = settings.agent_dry_run
+  expiration = settings.laz_card_expiration.split("/", 1) if dry_run_card else []
+  return SecretVault(
+    card_number=settings.agent_card_number or (settings.laz_card_number if dry_run_card else ""),
+    card_cvv=settings.agent_card_cvv or (settings.laz_card_cvv if dry_run_card else ""),
+    card_expiry_month=settings.agent_card_expiry_month or (expiration[0] if len(expiration) == 2 else ""),
+    card_expiry_year=settings.agent_card_expiry_year or (expiration[1] if len(expiration) == 2 else ""),
+    card_zip=settings.agent_card_zip or (settings.test_zip_code if dry_run_card else ""),
+  )
 
 
 class ResultEmailSender(Protocol):
@@ -282,12 +296,8 @@ def main() -> None:
     from parking_backend.agent.diag import DiagnosticWriter
     from parking_backend.agent.driver import DriverSession
     from parking_backend.agent.llm import VertexGeminiClient
-    from parking_backend.agent.secrets import SecretVault
 
-    vault = SecretVault(card_number=settings.agent_card_number, card_cvv=settings.agent_card_cvv,
-                        card_expiry_month=settings.agent_card_expiry_month,
-                        card_expiry_year=settings.agent_card_expiry_year,
-                        card_zip=settings.agent_card_zip)
+    vault = agent_vault(settings)
     adapters[GENERIC_PROVIDER_ID] = GenericAgentAdapter(
       llm=VertexGeminiClient(location=settings.agent_location, model=settings.agent_model),
       vault=vault,

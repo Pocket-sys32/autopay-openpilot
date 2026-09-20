@@ -1,4 +1,5 @@
 from pathlib import Path
+from dataclasses import replace
 import tempfile
 import time
 import unittest
@@ -9,7 +10,7 @@ from parking_backend.errors import CaptchaChallenged
 from parking_backend.laz_adapter import PaymentDeclined
 from parking_backend.store import InvalidAttempt, ParkingStore
 from parking_backend.tests.test_store import request
-from parking_backend.worker import Worker
+from parking_backend.worker import Worker, agent_vault
 
 
 class FakeAdapter:
@@ -51,6 +52,23 @@ def settings_for(database) -> Settings:
     gmail_refresh_token="", test_card_number="4242", test_card_cvv="123", test_card_expiration="12/30",
     test_zip_code="95616", laz_enabled=False, laz_card_number="", laz_card_cvv="", laz_card_expiration="",
     flaresolverr_url=None)
+
+
+class TestAgentVault(unittest.TestCase):
+  def test_dry_run_may_reuse_the_provisioned_card_without_enabling_live_payment(self):
+    settings = replace(settings_for(Path("/tmp/test.db")), agent_dry_run=True,
+                       laz_card_number="4242424242424242", laz_card_cvv="123",
+                       laz_card_expiration="12/30")
+    vault = agent_vault(settings)
+    self.assertEqual((vault.card_number, vault.card_expiry_month, vault.card_expiry_year),
+                     ("4242424242424242", "12", "30"))
+
+  def test_live_agent_never_inherits_another_adapters_card(self):
+    settings = replace(settings_for(Path("/tmp/test.db")), agent_dry_run=False,
+                       laz_card_number="4242424242424242", laz_card_cvv="123",
+                       laz_card_expiration="12/30")
+    vault = agent_vault(settings)
+    self.assertEqual((vault.card_number, vault.card_cvv, vault.card_expiry_month), ("", "", ""))
 
 
 class TestWorker(unittest.TestCase):
