@@ -18,9 +18,11 @@ def main() -> None:
   if params.get_bool("IsReleaseBranch"):
     raise SystemExit("Bench reset is disabled on release branches")
   params.put_bool("ParkingAutoPayEnabled", False, block=True)
-  for key in ("ParkingCancelRequested", "ParkingCurrentEpisode", "ParkingLatestSummary", "ParkingPendingPayload", "ParkingSuppressEpisode"):
+  for key in ("ParkingCancelRequested", "ParkingConfirmRequested", "ParkingCurrentEpisode", "ParkingLatestSummary",
+              "ParkingPendingConfirmation", "ParkingPendingPayload", "ParkingSuppressEpisode"):
     params.remove(key)
-  journal = Path(Paths.persist_root()) / "parking" / "parking.db"
+  configured_journal = params.get("ParkingJournalPath") or ""
+  journal = Path(configured_journal) if configured_journal else Path(Paths.persist_root()) / "parking" / "parking.db"
   if journal.exists():
     timestamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
     backup = journal.with_name(f"parking.bench-backup-{timestamp}.db")
