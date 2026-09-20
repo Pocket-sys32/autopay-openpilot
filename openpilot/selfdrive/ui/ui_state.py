@@ -175,7 +175,7 @@ class UIState:
     # Update started state. Parking test mode emulates the on-road HUD off-car
     # without starting selfdrived or card.
     self.started = ((self.sm["deviceState"].started and self.ignition) or
-                    (self.params.get_bool("ParkingTestMode") and not self.is_release))
+                    (self.params.get_bool("ParkingTestMode") and not self.is_release and self.params.get_bool("IsOffroad")))
 
     # Update body state
     if self.CP is not None and self.is_body != self.CP.notCar:

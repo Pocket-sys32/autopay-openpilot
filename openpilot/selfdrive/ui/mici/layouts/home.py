@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import math
+import random
 import time
 
 from openpilot.cereal import log
@@ -12,13 +13,12 @@ from openpilot.system.ui.widgets.layouts import HBoxLayout
 from openpilot.system.ui.widgets.icon_widget import IconWidget
 from openpilot.system.ui.widgets.label import UnifiedLabel, gui_label
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, TextAlignment, TextAlignmentVertical
-from openpilot.selfdrive.ui.mici.parking_overlay import draw_parking_banner
 from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
-from openpilot.common.version import RELEASE_BRANCHES
 
-HEAD_BUTTON_FONT_SIZE = 40
 HOME_PADDING = 8
 ALERTS_ZONE_WIDTH = 180
+# A restrained, deep metallic green inspired by BMW's Sanremo Green.
+SANREMO_GREEN = (46, 132, 91)
 
 NetworkType = log.DeviceState.NetworkType
 
@@ -156,12 +156,26 @@ class MiciHomeLayout(Widget):
       self._mic_icon,
     ], spacing=18)
 
-    self._openpilot_label = UnifiedLabel("openpilot", font_size=96, font_weight=FontWeight.DISPLAY, max_width=480, wrap_text=False)
-    self._version_label = UnifiedLabel("", font_size=36, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
+    self._pay_label = UnifiedLabel("Pay", font_size=88, text_color=rl.Color(*SANREMO_GREEN, 255),
+                                   font_weight=FontWeight.DISPLAY, max_width=480, wrap_text=False)
+    self._pilot_label = UnifiedLabel("Pilot", font_size=88, font_weight=FontWeight.DISPLAY, max_width=480, wrap_text=False)
+    # Pick scattered positions once. Favor open space, including across the
+    # vertical wrap boundary, so the moving symbols do not form rows or clumps.
+    rng = random.Random(42)
+    self._dollar_positions: list[tuple[float, float]] = []
+    for _ in range(12):
+      candidates = [(rng.random(), rng.random()) for _ in range(40)]
+      position = max(candidates, key=lambda point: min(
+        ((point[0] - x) * 1.8) ** 2 + min(abs(point[1] - y), 1 - abs(point[1] - y)) ** 2
+        for x, y in self._dollar_positions
+      )) if self._dollar_positions else candidates[0]
+      self._dollar_positions.append(position)
+    self._version_label = UnifiedLabel("", font_size=28, text_color=rl.Color(174, 174, 178, 255),
+                                       font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
     self._large_version_label = UnifiedLabel("", font_size=64, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
-    self._date_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
-    self._branch_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, scroll=True)
-    self._version_commit_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
+    self._date_label = UnifiedLabel("", font_size=28, text_color=rl.Color(99, 99, 102, 255),
+                                    font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
+    self._intro_started = rl.get_time()
 
   def _update_state(self):
     if self.is_pressed and not self._is_pressed_prev:
@@ -199,12 +213,9 @@ class MiciHomeLayout(Widget):
         self._on_settings_click()
     self._did_long_press = False
 
-  def _get_version_text(self) -> tuple[str, str, str, str] | None:
+  def _get_version_text(self) -> tuple[str, str] | None:
     version = ui_state.params.get("Version")
-    branch = ui_state.params.get("GitBranch")
-    commit = ui_state.params.get("GitCommit")
-
-    if not all((version, branch, commit)):
+    if not version:
       return None
 
     commit_date_raw = ui_state.params.get("GitCommitDate")
@@ -215,38 +226,58 @@ class MiciHomeLayout(Widget):
     except (ValueError, IndexError, TypeError, AttributeError):
       date_str = ""
 
-    return version, branch, commit[:7], date_str
+    return version, date_str
+
+  def _draw_dollar_background(self):
+    """Float a fixed set of soft green symbols behind the home-page content."""
+    font = gui_app.font(FontWeight.DISPLAY)
+    elapsed = rl.get_time()
+    travel = max(1.0, self.rect.height - 56)
+    for index, (anchor_x, anchor_y) in enumerate(self._dollar_positions):
+      size = 24 + (index * 7 % 13)
+      progress = (anchor_y + elapsed * 6 / travel) % 1.0
+      y = (1.0 - progress) * max(1.0, travel - size)
+      x = 10 + anchor_x * max(1.0, self.rect.width - size - 20)
+      x += math.sin(elapsed * 0.35 + index * 2.4) * 5
+      # Fade in over the first 48 px after a symbol wraps onto the bottom edge.
+      edge_fade = min(1.0, progress * travel / 48, (1.0 - progress) * travel / 48)
+      opacity = round(88 * edge_fade)
+      rl.draw_text_ex(font, "$", rl.Vector2(self.rect.x + x, self.rect.y + y),
+                      size, 0, rl.Color(*SANREMO_GREEN, opacity))
 
   def _render(self, _):
+    self._draw_dollar_background()
+    intro_elapsed = rl.get_time() - self._intro_started
+
+    def reveal(delay: float) -> float:
+      progress = max(0.0, min(1.0, (intro_elapsed - delay) / 0.38))
+      return 1.0 - (1.0 - progress) ** 3
+
+    pay_reveal = reveal(0.0)
+    pilot_reveal = reveal(0.07)
+    metadata_reveal = reveal(0.22)
+
     # TODO: why is there extra space here to get it to be flush?
     text_pos = rl.Vector2(self.rect.x - 2 + HOME_PADDING, self.rect.y - 16)
-    self._openpilot_label.set_position(text_pos.x, text_pos.y)
-    self._openpilot_label.render()
+    self._pay_label.set_text_color(rl.Color(*SANREMO_GREEN, round(255 * pay_reveal)))
+    self._pay_label.set_position(text_pos.x, text_pos.y + 12 * (1.0 - pay_reveal))
+    self._pay_label.render()
+    self._pilot_label.set_text_color(rl.Color(255, 255, 255, round(255 * pilot_reveal)))
+    self._pilot_label.set_position(text_pos.x + self._pay_label.text_width, text_pos.y + 12 * (1.0 - pilot_reveal))
+    self._pilot_label.render()
 
     if self._version_text is not None:
-      # release branch
-      release_branch = self._version_text[1] in RELEASE_BRANCHES
-      version_pos = rl.Rectangle(text_pos.x, text_pos.y + self._openpilot_label.font_size + 16, 100, 44)
+      version_pos = rl.Rectangle(text_pos.x + 4, text_pos.y + self._pay_label.font_size + 10, 100, 36)
       self._version_label.set_text(self._version_text[0])
-      self._version_label.set_position(version_pos.x, version_pos.y)
+      self._version_label.set_text_color(rl.Color(174, 174, 178, round(255 * metadata_reveal)))
+      self._version_label.set_position(version_pos.x, version_pos.y + 8 * (1.0 - metadata_reveal))
       self._version_label.render()
 
-      self._date_label.set_text(" " + self._version_text[3])
-      self._date_label.set_position(version_pos.x + self._version_label.text_width + 10, version_pos.y)
+      self._date_label.set_text("  ·  " + self._version_text[1])
+      self._date_label.set_text_color(rl.Color(99, 99, 102, round(255 * metadata_reveal)))
+      self._date_label.set_position(version_pos.x + self._version_label.text_width + 10,
+                                    version_pos.y + 8 * (1.0 - metadata_reveal))
       self._date_label.render()
-
-      self._branch_label.set_max_width(gui_app.width - self._version_label.text_width - self._date_label.text_width - 32)
-      self._branch_label.set_text(" " + ("release" if release_branch else self._version_text[1]))
-      self._branch_label.set_position(version_pos.x + self._version_label.text_width + self._date_label.text_width + 20, version_pos.y)
-      self._branch_label.render()
-
-      if not release_branch:
-        # 2nd line
-        self._version_commit_label.set_text(self._version_text[2])
-        self._version_commit_label.set_position(version_pos.x, version_pos.y + self._date_label.font_size + 7)
-        self._version_commit_label.render()
-
-    draw_parking_banner(self.rect.x, self.rect.y + 172)
 
     # ***** Center-aligned bottom section icons *****
     usb_connected = ui_state.usb_connected

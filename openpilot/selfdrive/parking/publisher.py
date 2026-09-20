@@ -7,11 +7,12 @@ import openpilot.cereal.messaging as messaging
 
 
 def mask_plate(plate: str) -> str:
-  if not plate:
-    return ""
-  if len(plate) <= 2:
-    return "*" * len(plate)
-  return f"{'*' * (len(plate) - 2)}{plate[-2:]}"
+  """Return the plate for the local vehicle UI.
+
+  The schema field keeps its original name for wire compatibility, but the
+  owner-facing UI intentionally shows the complete configured plate.
+  """
+  return plate
 
 
 @dataclass(frozen=True, slots=True)

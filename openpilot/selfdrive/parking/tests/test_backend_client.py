@@ -61,3 +61,21 @@ class TestBackendClient(OpenpilotTestCase):
     self.assertEqual(response.body["next_sequence"], 3)
     self.assertIn("after=3", session.calls[0][1])
     self.assertEqual(session.calls[0][2]["timeout"], 35.0)
+
+  def test_snapshot_upload_is_raw_authenticated_jpeg(self):
+    session = FakeSession(FakeResponse({"payloads": ["comma:park:demo"], "retained": False}))
+    client = ParkingBackendClient("http://127.0.0.1:8080", "demo", session=session, auth_header="Bearer token")
+    response = client.decode_snapshot(b"jpeg", "narrow")
+    self.assertEqual(response.body["payloads"], ["comma:park:demo"])
+    _method, _url, kwargs = session.calls[0]
+    self.assertEqual(kwargs["data"], b"jpeg")
+    self.assertEqual(kwargs["headers"]["Content-Type"], "image/jpeg")
+    self.assertEqual(kwargs["headers"]["X-Parking-Camera"], "narrow")
+    self.assertEqual(kwargs["headers"]["Authorization"], "Bearer token")
+
+  def test_snapshot_size_and_stream_are_bounded(self):
+    client = ParkingBackendClient("http://127.0.0.1:8080", "demo", session=FakeSession())
+    with self.assertRaises(ValueError):
+      client.decode_snapshot(b"", "narrow")
+    with self.assertRaises(ValueError):
+      client.decode_snapshot(b"jpeg", "driver")

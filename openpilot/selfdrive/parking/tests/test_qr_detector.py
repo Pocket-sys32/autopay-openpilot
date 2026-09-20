@@ -38,3 +38,21 @@ class TestQRDetector(OpenpilotTestCase):
     self.assertIsNone(consensus.observe(two, 2))
     self.assertIsNone(consensus.observe(one, 1_000_000_003))
     self.assertEqual(consensus.observe(one, 1_000_000_004), "one")
+
+  def test_majority_recovers_after_stray_frame(self):
+    consensus = CandidateConsensus()
+    one = QRScan((QRObservation("one", "full", 1),))
+    conflict = QRScan((QRObservation("one", "full", 2), QRObservation("two", "full", 2)))
+    self.assertIsNone(consensus.observe(one, 1))
+    self.assertIsNone(consensus.observe(conflict, 2))
+    self.assertEqual(consensus.observe(one, 3), "one")
+    self.assertIsNone(consensus.observe(conflict, 4))
+
+  def test_scanner_selects_only_requested_camera(self):
+    from openpilot.cereal.visionipc import VisionStreamType
+    from openpilot.selfdrive.parking.qr_detector import VisionQRScanner
+    for wide, stream in ((False, VisionStreamType.VISION_STREAM_NARROW_ROAD),
+                         (True, VisionStreamType.VISION_STREAM_WIDE_ROAD)):
+      scanner = VisionQRScanner(backend_provider=lambda: None, prefer_wide=wide)
+      self.assertEqual(scanner._preferred_streams, (stream,))
+      scanner._executor.shutdown()

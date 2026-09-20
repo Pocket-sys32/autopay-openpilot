@@ -3,18 +3,18 @@ from openpilot.selfdrive.parking.publisher import ParkingDisplayState, build_mes
 
 
 class TestParkingPublisher(OpenpilotTestCase):
-  def test_mask_plate(self):
-    self.assertEqual(mask_plate("ABC123"), "****23")
-    self.assertEqual(mask_plate("A"), "*")
+  def test_local_plate_is_not_redacted(self):
+    self.assertEqual(mask_plate("ABC123"), "ABC123")
+    self.assertEqual(mask_plate("A"), "A")
     self.assertEqual(mask_plate(""), "")
 
-  def test_build_message_redacts_plate_and_bounds_reasoning(self):
+  def test_build_message_displays_plate_and_bounds_reasoning(self):
     msg = build_message(ParkingDisplayState(
       phase="active",
       plate="ABC123",
       parking_status="active",
       reasoning_summary_redacted="x" * 300,
     ))
-    self.assertEqual(msg.parkingState.plateMasked, "****23")
+    self.assertEqual(msg.parkingState.plateMasked, "ABC123")
     self.assertEqual(msg.parkingState.parkingStatus, "active")
     self.assertEqual(len(msg.parkingState.reasoningSummaryRedacted), 256)
