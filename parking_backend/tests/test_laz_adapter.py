@@ -1,7 +1,10 @@
+import tempfile
 import unittest
+from unittest import mock
 
 from parking_backend.appium_adapter import FormChanged
-from parking_backend.laz_adapter import LazAdapter, LazProfile, is_decline, parse_pay_total_minor, split_expiry
+from parking_backend.laz_adapter import (DEFAULT_WARMUP_URLS, LazAdapter, LazProfile, is_decline,
+                                         parse_pay_total_minor, split_expiry)
 
 
 def adapter() -> LazAdapter:
@@ -63,6 +66,79 @@ class TestCardFields(unittest.TestCase):
     self.assertEqual(list(LazAdapter._classify_card_fields(four).values()), four)
     with self.assertRaises(FormChanged):
       LazAdapter._classify_card_fields([FakeField(), FakeField(), FakeField()])
+
+
+class FakeDriver:
+  """Enough of a WebDriver for the warm-up and the reCAPTCHA probe."""
+
+  def __init__(self, *, script=None, cookies=None, fail_on: str = ""):
+    self.script, self.cookies, self.fail_on = script, cookies, fail_on
+    self.visited: list[str] = []
+
+  def get(self, url):
+    if url == self.fail_on:
+      raise RuntimeError("site is down")
+    self.visited.append(url)
+
+  def execute_script(self, *_args):
+    if isinstance(self.script, Exception):
+      raise self.script
+    return self.script
+
+  def get_cookies(self):
+    if isinstance(self.cookies, Exception):
+      raise self.cookies
+    return self.cookies
+
+
+class TestRecaptchaProbe(unittest.TestCase):
+  def test_reports_a_challenge_only_when_the_page_says_so(self):
+    self.assertTrue(LazAdapter._recaptcha_challenged(FakeDriver(script=True)))
+    self.assertFalse(LazAdapter._recaptcha_challenged(FakeDriver(script=False)))
+
+  def test_a_probe_failure_never_invents_a_challenge(self):
+    self.assertFalse(LazAdapter._recaptcha_challenged(FakeDriver(script=RuntimeError("no such frame"))))
+
+  def test_google_session_is_reported_by_cookie_name_only(self):
+    signed_in = [{"name": "SID", "value": "secret"}, {"name": "NID", "value": "x"}]
+    self.assertEqual(LazAdapter._google_session(FakeDriver(cookies=signed_in)), "yes")
+    self.assertEqual(LazAdapter._google_session(FakeDriver(cookies=[{"name": "NID", "value": "x"}])), "no")
+    self.assertEqual(LazAdapter._google_session(FakeDriver(cookies=RuntimeError("closed"))), "unknown")
+
+
+class TestWarmUp(unittest.TestCase):
+  def setUp(self):
+    self.diag = tempfile.TemporaryDirectory()
+    self.addCleanup(self.diag.cleanup)
+    patcher = mock.patch.dict("os.environ", {"PARKING_DIAG_DIR": self.diag.name})
+    patcher.start()
+    self.addCleanup(patcher.stop)
+
+  def test_warmup_urls_default_and_can_be_overridden_or_disabled(self):
+    self.assertEqual(adapter().warmup_urls, DEFAULT_WARMUP_URLS)
+    with mock.patch.dict("os.environ", {"PARKING_LAZ_WARMUP_URLS": " https://a.test/ , https://b.test/ "}):
+      self.assertEqual(adapter().warmup_urls, ("https://a.test/", "https://b.test/"))
+    with mock.patch.dict("os.environ", {"PARKING_LAZ_WARMUP_URLS": ""}):
+      self.assertEqual(adapter().warmup_urls, ())
+
+  def test_disabled_warmup_visits_nothing(self):
+    with mock.patch.dict("os.environ", {"PARKING_LAZ_WARMUP_URLS": ""}):
+      driver = FakeDriver()
+      adapter()._warm_up(driver)
+      self.assertEqual(driver.visited, [])
+
+  def test_a_dead_warmup_site_is_not_an_outcome(self):
+    with mock.patch.dict("os.environ", {"PARKING_LAZ_WARMUP_URLS": "https://down.test/,https://up.test/"}):
+      driver = FakeDriver(fail_on="https://down.test/")
+      adapter()._warm_up(driver)  # must not raise: warming is not the purchase
+      self.assertEqual(driver.visited, ["https://up.test/"])
+
+  def test_the_budget_stops_the_warmup_before_the_worker_deadline(self):
+    with mock.patch.dict("os.environ", {"PARKING_LAZ_WARMUP_URLS": "https://a.test/,https://b.test/",
+                                        "PARKING_LAZ_WARMUP_BUDGET": "0"}):
+      driver = FakeDriver()
+      adapter()._warm_up(driver)
+      self.assertEqual(driver.visited, [])
 
 
 if __name__ == "__main__":

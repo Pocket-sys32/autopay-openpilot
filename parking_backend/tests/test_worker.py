@@ -5,7 +5,7 @@ import unittest
 
 from parking_backend.config import Settings
 from parking_backend.gmail import EmailDeliveryUnknown
-from parking_backend.laz_adapter import PaymentDeclined
+from parking_backend.laz_adapter import CaptchaChallenged, PaymentDeclined
 from parking_backend.store import InvalidAttempt, ParkingStore
 from parking_backend.tests.test_store import request
 from parking_backend.worker import Worker
@@ -113,6 +113,12 @@ class DecliningAdapter(FakeAdapter):
     raise PaymentDeclined("declined")
 
 
+class ChallengedAdapter(FakeAdapter):
+  def submit(self, payload, *, mark_submitting):
+    self.calls += 1  # the real adapter raises before PAY, so mark_submitting is deliberately never called
+    raise CaptchaChallenged("reCAPTCHA challenged the checkout before payment")
+
+
 class TestLazWorker(TestWorker):
   def test_declined_card_is_a_definitive_failure_without_retry(self):
     self.store.put_attempt("comma", laz_request(), now_ms=time.time_ns() // 1_000_000)
@@ -124,6 +130,17 @@ class TestLazWorker(TestWorker):
     self.assertEqual((result["state"], result["reason_code"]), ("failed", "PAYMENT_DECLINED"))
     self.assertFalse(result["demo"])
     self.assertEqual(adapter.calls, 1)
+    self.assertIsNone(self.store.claim_next(now_ms=time.time_ns() // 1_000_000 + 5_000))
+
+  def test_a_captcha_challenge_needs_a_person_and_buys_nothing(self):
+    self.store.put_attempt("comma", laz_request(), now_ms=time.time_ns() // 1_000_000)
+    adapter = ChallengedAdapter()
+    worker = Worker(self.settings, self.store, {"laz_ttp": adapter}, FakeEmail())
+    worker.process_once()
+    result = self.store.get_attempt("comma", "attempt-1")
+    assert result is not None
+    self.assertEqual((result["state"], result["reason_code"]), ("action_required", "CAPTCHA_CHALLENGED"))
+    self.assertFalse(result["demo"])
     self.assertIsNone(self.store.claim_next(now_ms=time.time_ns() // 1_000_000 + 5_000))
 
   def test_laz_attempt_needs_the_provider_to_be_enabled(self):

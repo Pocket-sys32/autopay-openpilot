@@ -9,7 +9,7 @@ from typing import Protocol, cast
 from parking_backend.appium_adapter import AndroidFormAdapter, FormChanged, SubmissionUnknown
 from parking_backend.config import Settings
 from parking_backend.gmail import EmailDeliveryUnknown, GmailSender
-from parking_backend.laz_adapter import LazAdapter, LazProfile, PaymentDeclined, ReservationRejected
+from parking_backend.laz_adapter import CaptchaChallenged, LazAdapter, LazProfile, PaymentDeclined, ReservationRejected
 from parking_backend.provider import ProviderAdapter
 from parking_backend.store import LAZ_PROVIDER_ID, ParkingStore
 
@@ -64,7 +64,8 @@ class Worker:
         raise FormChanged("provider location is no longer allowlisted")
       adapter.get_quote(location_id=str(request["form_id"]), plate=str(request["plate"]),
                         duration_seconds=duration_value)
-      with automation_deadline(120):
+      # The LAZ path now warms the browser profile before the checkout, which the old 120 s did not allow for.
+      with automation_deadline(180):
         result = adapter.submit(
           request,
           mark_submitting=lambda: self._mark_submitting(attempt_id),
@@ -75,6 +76,10 @@ class Worker:
                           {"demo": False, "message": "LAZ rejected the reservation. Nothing was purchased."})
     except PaymentDeclined:
       self.store.complete(attempt_id, "failed", "PAYMENT_DECLINED", {"demo": False, "message": "Payment declined. Nothing was purchased."})
+    except CaptchaChallenged:
+      # Raised before PAY, so this is a state in which nothing was purchased and a person can clear it.
+      self.store.complete(attempt_id, "action_required", "CAPTCHA_CHALLENGED",
+                          {"demo": False, "message": "reCAPTCHA challenged the checkout. Nothing was purchased."})
     except FormChanged as exc:
       self.store.complete(attempt_id, "action_required", "FORM_CHANGED", {"demo": True, "message": str(exc)})
     except SubmissionUnknown as exc:

@@ -71,9 +71,35 @@ The login persists: `-no-snapshot` only disables Quick Boot, so `userdata-qemu.i
 Chrome profile across restarts, and both adapters set `appium:noReset` so a session never clears them. Passing
 `-wipe-data`, recreating the AVD, or deleting that image throws the account away.
 
-A Google session only affects Google's own reCAPTCHA. The LAZ entry page is gated by Cloudflare, which issues
-`cf_clearance` from IP reputation and browser fingerprint and never reads the Google session, so it is not a
-fix for the verification page sticking.
+The two gates are separate and want different things. Cloudflare, on the entry page, issues `cf_clearance` from
+IP reputation and browser fingerprint and never reads the Google session. reCAPTCHA, at the checkout, is the one
+a signed-in Google account helps: it reads google.com's cookies from its own iframe, and scores a browser with a
+real session far above an anonymous one.
+
+## reCAPTCHA at the checkout
+
+Three things work on the checkout's reCAPTCHA score, in descending order of effect:
+
+1. The signed-in Google account above. This is the large one.
+2. Warming the profile. Before the checkout, `LazAdapter` loads `DEFAULT_WARMUP_URLS` — google.com, which is
+   where the session cookies live and is the only one that really counts, then wikipedia.org and LAZ's own
+   homepage, which is where a person would normally have started. Set `PARKING_LAZ_WARMUP_URLS` to a
+   comma-separated list to change it, or to the empty string to switch warming off; `PARKING_LAZ_WARMUP_BUDGET`
+   (default 30 s) caps the whole warm-up so a slow site cannot eat the worker's deadline. A warm-up failure is
+   logged and ignored: it is not the purchase. The worker's per-attempt deadline is 180 s to allow for this.
+3. Chrome now launches with `--disable-blink-features=AutomationControlled`. Chromedriver otherwise leaves
+   `navigator.webdriver` set, which reCAPTCHA reads.
+
+Each run writes `<stamp>-0-warmup.txt` into `PARKING_DIAG_DIR`, recording which sites loaded and whether a
+Google session cookie was present. That file is how you confirm the sign-in actually reached Chrome; it records
+cookie names only, never values. If it says `google session cookie present: no` after you have signed in, the
+account is on the device but not in Chrome's own profile.
+
+A visible challenge is now recognised rather than left to time out. Before PAY it raises `CaptchaChallenged`,
+which the worker records as `action_required` / `CAPTCHA_CHALLENGED` with nothing purchased, and snapshots
+`0-recaptcha-before-pay`. After PAY the result is genuinely ambiguous, so it stays `unknown` — it is only
+snapshotted as `5-recaptcha-after-pay` and noted in the message. Clear a challenge by hand with
+`remote_emulator.sh`; the cleared state lives in the same persistent profile.
 
 ## Gmail
 

@@ -25,6 +25,26 @@ DECLINE_MARKERS = ("declined", "unsuccessful", "could not be processed", "card w
 # rejection of the reservation itself, not a card decline.
 RESERVATION_MARKERS = ("could not validate reservation",)
 PRICE_RE = re.compile(r"PAY\s*\$\s*(\d+(?:\.\d{2})?)")
+# Pages loaded before the checkout so it is not reached from a browser with an empty cookie jar. google.com is
+# the one that matters: that is where a signed-in session's cookies live, and reCAPTCHA reads them from its own
+# iframe. LAZ's own homepage is where a person would normally start, and it sets the site's first-party cookies.
+DEFAULT_WARMUP_URLS = ("https://www.google.com/", "https://www.wikipedia.org/", "https://www.lazparking.com/")
+# Set by a signed-in Google session. Their presence is recorded; their values never are.
+GOOGLE_SESSION_COOKIES = frozenset({"SID", "SSID", "HSID", "SAPISID", "APISID", "__Secure-1PSID", "__Secure-3PSID"})
+# reCAPTCHA always embeds an anchor iframe, even when it lets the visitor through. Only the bframe, and only
+# while it is actually visible, means a challenge is on screen.
+RECAPTCHA_CHALLENGE_JS = """
+return [...document.querySelectorAll('iframe')].some(f => {
+  if (!/recaptcha\\/(api2|enterprise)\\/bframe/.test(f.src || '')) return false;
+  const box = f.getBoundingClientRect();
+  if (!box.width || !box.height) return false;
+  for (let e = f; e; e = e.parentElement) {
+    const s = getComputedStyle(e);
+    if (s.visibility === 'hidden' || s.display === 'none' || s.opacity === '0') return false;
+  }
+  return true;
+});
+"""
 
 
 class PaymentDeclined(RuntimeError):
@@ -37,6 +57,11 @@ class ReservationRejected(RuntimeError):
 
 class PriceLimitExceeded(FormChanged):
   pass
+
+
+class CaptchaChallenged(FormChanged):
+  """reCAPTCHA put a challenge on screen. A person has to clear it, so this is action_required, like any other
+  FormChanged; raising it before PAY is clicked keeps it a state in which nothing was purchased."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +123,12 @@ class LazAdapter:
     self.expiration = expiration
     self.profile = profile
     self.flaresolverr_url = flaresolverr_url or os.getenv("FLARESOLVERR_URL")
+    # An empty PARKING_LAZ_WARMUP_URLS turns warming off; the budget caps it so a slow site cannot eat the
+    # worker's deadline.
+    configured = os.getenv("PARKING_LAZ_WARMUP_URLS")
+    self.warmup_urls = (tuple(u.strip() for u in configured.split(",") if u.strip())
+                        if configured is not None else DEFAULT_WARMUP_URLS)
+    self.warmup_budget = int(os.getenv("PARKING_LAZ_WARMUP_BUDGET", "30"))
 
   def validate_location(self, location_id: str) -> bool:
     return location_id == LOCATION_ID
@@ -137,11 +168,16 @@ class LazAdapter:
     options.set_capability("appium:newCommandTimeout", 150)
     options.set_capability("appium:noReset", True)
     options.set_capability("appium:chromedriverExecutable", CHROMEDRIVER_PATH)
+    # Chromedriver otherwise leaves navigator.webdriver set, which reCAPTCHA reads and scores against.
+    chrome_args = ["--disable-blink-features=AutomationControlled"]
     if solution and solution.get("userAgent"):
-      options.set_capability("appium:chromeOptions", {"args": [f"--user-agent={solution['userAgent']}"]})
+      chrome_args.append(f"--user-agent={solution['userAgent']}")
+    options.set_capability("appium:chromeOptions", {"args": chrome_args})
     driver = webdriver.Remote(self.appium_url, options=options)
     driver.set_page_load_timeout(30)
     try:
+      self._stamp = time.strftime("%Y%m%dT%H%M%S")
+      self._warm_up(driver)
       driver.get(ENTRY_URL)
       if solution:
         for cookie in solution.get("cookies", []):
@@ -200,6 +236,10 @@ class LazAdapter:
         raise FormChanged("pay button not found")
       time.sleep(2)  # give any late re-render a chance to clear a field before it is re-checked
       self._verify_fields(driver)
+      # Stop here rather than clicking PAY into a challenge: nothing has been purchased yet at this point.
+      if self._recaptcha_challenged(driver):
+        self._snapshot(driver, "0-recaptcha-before-pay")
+        raise CaptchaChallenged("reCAPTCHA challenged the checkout before payment")
       self._snapshot(driver, "1-before-pay", screenshot=False)
       self._hook_network(driver)
       mark_submitting()
@@ -211,6 +251,46 @@ class LazAdapter:
   @staticmethod
   def _fail(message: str):
     raise FormChanged(message)
+
+  def _warm_up(self, driver) -> None:
+    """Load a few ordinary pages before the checkout, so reCAPTCHA is not reading a browser that has visited
+    nothing. A warm-up failure is never an outcome: any site may be slow or down, and none of this is the
+    purchase. The Chrome profile persists between runs (appium:noReset), so this tops it up rather than
+    building it from nothing every time."""
+    if not self.warmup_urls:
+      return
+    deadline = time.monotonic() + self.warmup_budget
+    notes = [f"budget {self.warmup_budget}s"]
+    for url in self.warmup_urls:
+      if time.monotonic() >= deadline:
+        notes.append("budget spent; remaining sites skipped")
+        break
+      try:
+        driver.get(url)
+        time.sleep(1)  # a page a person opened would stay on screen at least this long
+        notes.append(f"{url}: loaded")
+        if "google.com" in url:
+          notes.append(f"google session cookie present: {self._google_session(driver)}")
+      except Exception as exc:
+        notes.append(f"{url}: {type(exc).__name__}")
+    self._write_diag("0-warmup", notes)
+
+  @staticmethod
+  def _google_session(driver) -> str:
+    """Whether Chrome is carrying a signed-in Google session. Records cookie names only, never their values."""
+    try:
+      names = {str(cookie.get("name", "")) for cookie in driver.get_cookies()}
+    except Exception:
+      return "unknown"
+    return "yes" if names & GOOGLE_SESSION_COOKIES else "no"
+
+  @staticmethod
+  def _recaptcha_challenged(driver) -> bool:
+    """True only when a reCAPTCHA challenge is actually on screen, not for its always-present anchor iframe."""
+    try:
+      return bool(driver.execute_script(RECAPTCHA_CHALLENGE_JS))
+    except Exception:
+      return False  # a detection failure must not invent a challenge
 
   @staticmethod
   def _wait(predicate, what: str, timeout: int = 30):
@@ -301,16 +381,19 @@ class LazAdapter:
     digits = re.sub(r"\D", "", value)
     return digits if raw else len(digits)
 
-  def _write_card_log(self, lines: list[str]) -> None:
-    """Record how many digits each card input held (never the digits) so a mismatch can be diagnosed."""
+  def _write_diag(self, label: str, lines: list[str]) -> None:
     from pathlib import Path
 
     try:
       directory = Path(os.getenv("PARKING_DIAG_DIR", "/var/lib/parking-demo/diag"))
       directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-      (directory / f"{self._stamp}-0-card-fields.txt").write_text("\n".join(lines) + "\n")
+      (directory / f"{self._stamp}-{label}.txt").write_text("\n".join(lines) + "\n")
     except Exception:
       pass  # diagnostics must never change the recorded outcome
+
+  def _write_card_log(self, lines: list[str]) -> None:
+    """Record how many digits each card input held (never the digits) so a mismatch can be diagnosed."""
+    self._write_diag("0-card-fields", lines)
 
   @staticmethod
   def _classify_card_fields(fields) -> dict:
@@ -339,9 +422,15 @@ class LazAdapter:
     started = time.monotonic()
     deadline = started + 45
     pending_snapshots = [(3, "2-after-pay-3s"), (10, "3-after-pay-10s")]
+    captcha_seen = False
     while time.monotonic() < deadline:
       if pending_snapshots and time.monotonic() - started >= pending_snapshots[0][0]:
         self._snapshot(driver, pending_snapshots.pop(0)[1])
+      # PAY has already been clicked, so a challenge here cannot be reported as "nothing was purchased";
+      # record it and let the usual unknown-outcome path run.
+      if not captcha_seen and self._recaptcha_challenged(driver):
+        captcha_seen = True
+        self._snapshot(driver, "5-recaptcha-after-pay")
       text = driver.find_element(By.TAG_NAME, "body").text
       if is_decline(text):
         raise PaymentDeclined("card was declined")
@@ -354,6 +443,8 @@ class LazAdapter:
                 "completed_unix_ms": time.time_ns() // 1_000_000}
       time.sleep(1)
     self._snapshot(driver, "4-final-unrecognised")
+    if captcha_seen:
+      raise SubmissionUnknown("payment outcome was not observed; reCAPTCHA challenged after PAY")
     raise SubmissionUnknown("payment outcome was not observed")
 
   _stamp = "run"
