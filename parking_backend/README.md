@@ -41,6 +41,30 @@ Write the bearer token to `/persist/parking/device-token` on comma four, owned b
 
 Keep `ParkingAutoPayEnabled` off until the VM's form and Gmail smoke tests succeed.
 
+## Signing the emulator in to Google
+
+The VM has no display, and the page is loaded by Chrome *inside* the emulator, so the account has to be added
+on the emulator itself. Drive it by hand once; never let Appium perform the sign-in, because Google refuses a
+WebDriver-controlled session with "this browser or app may not be secure".
+
+```bash
+systemctl stop parking-worker            # on the VM, so no attempt runs during the session
+./deploy/remote_emulator.sh              # on your workstation; needs gcloud, adb and scrcpy
+```
+
+The script tunnels the emulator's loopback adb port over SSH and mirrors the screen. In the mirrored device:
+Settings -> Passwords & accounts -> Add account -> Google, then open Chrome and pick the same account. The AVD
+uses the `google_apis_playstore` image, so this is the real Play Services sign-in flow and 2FA prompts work
+normally. Start `parking-worker` again when you are done.
+
+The login persists: `-no-snapshot` only disables Quick Boot, so `userdata-qemu.img` keeps the account and the
+Chrome profile across restarts, and both adapters set `appium:noReset` so a session never clears them. Passing
+`-wipe-data`, recreating the AVD, or deleting that image throws the account away.
+
+A Google session only affects Google's own reCAPTCHA. The LAZ entry page is gated by Cloudflare, which issues
+`cf_clearance` from IP reputation and browser fingerprint and never reads the Google session, so it is not a
+fix for the verification page sticking.
+
 ## Gmail
 
 Create an OAuth desktop client in `fieldscout-497018`, enable the Gmail API, and add `pocketsfast@gmail.com` as a test user. Run `oauth_authorize.py` locally and place the resulting refresh token in the protected environment file. The service requests only `gmail.send`.
